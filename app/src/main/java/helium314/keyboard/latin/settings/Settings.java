@@ -181,6 +181,10 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
     public static final String PREF_VERSION_CODE = "version_code";
     public static final String PREF_LIBRARY_CHECKSUM = "lib_checksum";
 
+    // VibeVoice ASR settings
+    public static final String PREF_VIBEVOICE_SERVER_URL = "vibevoice_server_url";
+    public static final String PREF_VIBEVOICE_AUTH_TOKEN = "vibevoice_auth_token";
+
     private Context mContext;
     private SharedPreferences mPrefs;
     private SettingsValues mSettingsValues;
@@ -201,6 +205,8 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
         add(PREF_EMOJI_RECENT_KEYS);
         add(PREF_DONT_SHOW_MISSING_DICTIONARY_DIALOG);
         add(PREF_SELECTED_SUBTYPE);
+        add(PREF_VIBEVOICE_SERVER_URL);
+        add(PREF_VIBEVOICE_AUTH_TOKEN);
     }};
 
     public static Settings getInstance() {

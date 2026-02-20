@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security config. The VibeVoice client handles self-signed
+    certificates programmatically via createTrustAllSslContext().
+-->
+<network-security-config />

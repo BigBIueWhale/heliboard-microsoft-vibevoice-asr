@@ -99,11 +99,10 @@ public final class InputAttributes {
 
         mShouldInsertSpacesAutomatically = InputTypeUtils.isAutoSpaceFriendlyType(inputType);
 
+        // Always show voice key for VibeVoice — no longer dependent on a shortcut IME.
+        // Still hide it on password fields and when explicitly suppressed.
         final boolean noMicrophone = mIsPasswordField
-                || InputTypeUtils.isEmailVariation(variation)
-                || hasNoMicrophoneKeyOption()
-                || !RichInputMethodManager.isInitialized() // avoid crash when only using spell checker
-                || !RichInputMethodManager.getInstance().isShortcutImeReady();
+                || hasNoMicrophoneKeyOption();
         mShouldShowVoiceInputKey = !noMicrophone;
 
         mDisableGestureFloatingPreviewText = InputAttributes.inPrivateImeOptions(

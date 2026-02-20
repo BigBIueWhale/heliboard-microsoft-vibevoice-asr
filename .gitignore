@@ -12,3 +12,6 @@ app/.cxx
 app/.attach_*
 fastlane/Appfile
 tools/*.txt
+
+# Built APKs — don't commit binaries
+*.apk

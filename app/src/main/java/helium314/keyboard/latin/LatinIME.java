@@ -181,6 +181,8 @@ public class LatinIME extends InputMethodService implements
 
     private final ClipboardHistoryManager mClipboardHistoryManager = new ClipboardHistoryManager(this);
 
+    private helium314.keyboard.latin.voice.VoiceInputController mVoiceInputController;
+
     public static final class UIHandler extends LeakGuardHandlerWrapper<LatinIME> {
         private static final int MSG_UPDATE_SHIFT_STATE = 0;
         private static final int MSG_PENDING_IMS_CALLBACK = 1;
@@ -668,6 +670,21 @@ public class LatinIME extends InputMethodService implements
         registerReceiver(mRestartAfterDeviceUnlockReceiver, restartAfterUnlockFilter);
 
         StatsUtils.onCreate(mSettings.getCurrent(), mRichImm);
+
+        // Initialize VibeVoice voice input controller
+        mVoiceInputController = new helium314.keyboard.latin.voice.VoiceInputController(
+                this,
+                (kotlin.jvm.functions.Function1<String, kotlin.Unit>) text -> {
+                    // Commit transcribed text via the InputConnection
+                    mInputLogic.mConnection.commitText(text, 1);
+                    mInputLogic.restartSuggestionsOnWordTouchedByCursor(
+                            mSettings.getCurrent(),
+                            mKeyboardSwitcher.getCurrentKeyboardScript());
+                    mKeyboardSwitcher.requestUpdatingShiftState(
+                            getCurrentAutoCapsState(), getCurrentRecapitalizeState());
+                    return kotlin.Unit.INSTANCE;
+                }
+        );
     }
 
     private void loadSettings() {
@@ -775,6 +792,9 @@ public class LatinIME extends InputMethodService implements
 
     @Override
     public void onDestroy() {
+        if (mVoiceInputController != null) {
+            mVoiceInputController.cancel();
+        }
         mClipboardHistoryManager.onDestroy();
         mDictionaryFacilitator.closeDictionaries();
         mSettings.onDestroy();
@@ -1137,6 +1157,9 @@ public class LatinIME extends InputMethodService implements
     void onFinishInputViewInternal(final boolean finishingInput) {
         super.onFinishInputView(finishingInput);
         Log.i(TAG, "onFinishInputView");
+        if (mVoiceInputController != null) {
+            mVoiceInputController.cancel();
+        }
         cleanupInternalStateForFinishInput();
     }
 
@@ -1545,6 +1568,45 @@ public class LatinIME extends InputMethodService implements
         }
     }
 
+    /**
+     * Handle voice input via the VibeVoice ASR server.
+     * Toggles between starting/stopping the recording.
+     */
+    private void handleVibeVoiceInput() {
+        if (mVoiceInputController == null) return;
+
+        // Check microphone permission — launch request Activity if needed
+        if (!helium314.keyboard.latin.voice.VoicePermissionActivity.Companion.hasRecordPermission(this)) {
+            startActivity(helium314.keyboard.latin.voice.VoicePermissionActivity.Companion.createIntent(this));
+            return;
+        }
+
+        switch (mVoiceInputController.getState()) {
+            case IDLE:
+                // Check configuration before starting
+                if (!helium314.keyboard.latin.voice.VibeVoiceClient.isConfigured(this)) {
+                    android.widget.Toast.makeText(this, R.string.vibevoice_not_configured, android.widget.Toast.LENGTH_LONG).show();
+                    return;
+                }
+                // Start recording — overlay onto the keyboard wrapper (FrameLayout)
+                final View keyboardWrapper = mKeyboardSwitcher.getMainKeyboardView() != null
+                        ? (View) mKeyboardSwitcher.getMainKeyboardView().getParent()
+                        : null;
+                if (keyboardWrapper instanceof android.view.ViewGroup) {
+                    mVoiceInputController.start((android.view.ViewGroup) keyboardWrapper);
+                }
+                break;
+            case RECORDING:
+                // Stop recording and begin transcription
+                mVoiceInputController.stop();
+                break;
+            case TRANSCRIBING:
+                // Cancel transcription on voice key press
+                mVoiceInputController.cancel();
+                break;
+        }
+    }
+
     // Implementation of {@link SuggestionStripView.Listener}.
     @Override
     public void onCodeInput(final int codePoint, final int x, final int y, final boolean isKeyRepeat) {
@@ -1555,7 +1617,8 @@ public class LatinIME extends InputMethodService implements
     // completely replace #onCodeInput.
     public void onEvent(@NonNull final Event event) {
         if (KeyCode.VOICE_INPUT == event.getMKeyCode()) {
-            mRichImm.switchToShortcutIme(this);
+            handleVibeVoiceInput();
+            return;  // Don't propagate the voice key event further
         }
         final InputTransaction completeInputTransaction =
                 mInputLogic.onCodeInput(mSettings.getCurrent(), event,

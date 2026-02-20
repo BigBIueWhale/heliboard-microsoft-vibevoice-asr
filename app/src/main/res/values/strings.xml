@@ -6,11 +6,11 @@
 -->
 <resources xmlns:tools="http://schemas.android.com/tools" xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <!-- Name of Android spell checker service. The app name should not be translated. -->
-    <string name="spell_checker_service_name">HeliBoard Spell Checker</string>
+    <string name="spell_checker_service_name">HeliBoard VibeVoice Spell Checker</string>
     <!-- Title for IME settings screen. The app name should not be translated. -->
-    <string name="ime_settings">HeliBoard Settings</string>
+    <string name="ime_settings">HeliBoard VibeVoice Settings</string>
     <!-- Title for the spell checking service settings screen. The app name should not be translated. -->
-    <string name="android_spell_checker_settings">HeliBoard Spell Checker Settings</string>
+    <string name="android_spell_checker_settings">HeliBoard VibeVoice Spell Checker Settings</string>
     <!-- Option to provide vibrate/haptic feedback on keypress -->
     <string name="vibrate_on_keypress">Vibrate on keypress</string>
     <!-- Option to provide vibrate/haptic feedback on keypress even in do not disturb mode -->
@@ -915,4 +915,20 @@ New dictionary:
     <string name="custom_subtype">Custom subtype</string>
     <!-- Name for landscape orientation, used in various settings -->
     <string name="landscape">Landscape</string>
+
+    <!-- VibeVoice voice input settings -->
+    <string name="settings_screen_voice_input">Voice Input</string>
+    <string name="vibevoice_server_url_title">Server URL</string>
+    <string name="vibevoice_server_url_description">HTTPS URL of your VibeVoice ASR server</string>
+    <string name="vibevoice_auth_token_title">Auth Token</string>
+    <string name="vibevoice_auth_token_description">JWT bearer token for server authentication</string>
+    <string name="vibevoice_test_connection">Test Connection</string>
+    <string name="vibevoice_test_connection_description">Verify the server is reachable</string>
+    <string name="vibevoice_connection_success">Connection successful</string>
+    <string name="vibevoice_connection_failure">Connection failed — check URL and token</string>
+    <string name="vibevoice_setup_link_title">Set Up VibeVoice Server</string>
+    <string name="vibevoice_setup_link_description">Requires a machine with a GPU. See the vibe-voice-vendor project on GitHub.</string>
+    <string name="vibevoice_not_configured">Voice input not configured. Set server URL and token in Settings → Voice Input.</string>
+    <string name="vibevoice_not_configured_short">Not configured</string>
+    <string name="vibevoice_testing">Testing…</string>
 </resources>

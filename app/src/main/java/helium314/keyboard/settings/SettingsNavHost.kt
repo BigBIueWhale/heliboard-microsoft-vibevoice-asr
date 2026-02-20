@@ -32,6 +32,7 @@ import helium314.keyboard.settings.screens.SecondaryLayoutScreen
 import helium314.keyboard.settings.screens.SubtypeScreen
 import helium314.keyboard.settings.screens.TextCorrectionScreen
 import helium314.keyboard.settings.screens.ToolbarScreen
+import helium314.keyboard.settings.screens.VoiceInputScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -71,6 +72,7 @@ fun SettingsNavHost(
                 onClickToolbar = { navController.navigate(SettingsDestination.Toolbar) },
                 onClickGestureTyping = { navController.navigate(SettingsDestination.GestureTyping) },
                 onClickAdvanced = { navController.navigate(SettingsDestination.Advanced) },
+                onClickVoiceInput = { navController.navigate(SettingsDestination.VoiceInput) },
                 onClickAppearance = { navController.navigate(SettingsDestination.Appearance) },
                 onClickLanguage = { navController.navigate(SettingsDestination.Languages) },
                 onClickLayouts = { navController.navigate(SettingsDestination.Layouts) },
@@ -95,6 +97,9 @@ fun SettingsNavHost(
         }
         composable(SettingsDestination.Advanced) {
             AdvancedSettingsScreen(onClickBack = ::goBack)
+        }
+        composable(SettingsDestination.VoiceInput) {
+            VoiceInputScreen(onClickBack = ::goBack)
         }
         composable(SettingsDestination.Debug) {
             DebugScreen(onClickBack = ::goBack)
@@ -152,6 +157,7 @@ object SettingsDestination {
     const val Languages = "languages"
     const val Subtype = "subtype/"
     const val Layouts = "layouts"
+    const val VoiceInput = "voice_input"
     const val Dictionaries = "dictionaries"
     val navTarget = MutableStateFlow(Settings)
 

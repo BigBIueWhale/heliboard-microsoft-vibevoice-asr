@@ -9,7 +9,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "helium314.keyboard"
+        applicationId = "helium314.keyboard.vibevoice"
         minSdk = 21
         targetSdk = 35
         versionCode = 3501
@@ -52,7 +52,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".debug"
         }
-        base.archivesBaseName = "HeliBoard_" + defaultConfig.versionName
+        base.archivesBaseName = "HeliBoard-VibeVoice_" + defaultConfig.versionName
     }
 
     buildFeatures {
