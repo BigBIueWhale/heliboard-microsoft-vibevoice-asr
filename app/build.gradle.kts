@@ -5,6 +5,16 @@ plugins {
     kotlin("plugin.compose") version "2.0.0"
 }
 
+val vibevoiceVersion: String = providers.environmentVariable("VIBEVOICE_VERSION").getOrElse("0.0.0-dev")
+val vibevoiceVersionCode: Int = run {
+    // Parse semver "X.Y.Z" into integer XYYZZZ (e.g. "0.1.0" -> 100, "1.2.3" -> 1002003)
+    val parts = vibevoiceVersion.split("-")[0].split(".").map { it.toIntOrNull() ?: 0 }
+    val major = parts.getOrElse(0) { 0 }
+    val minor = parts.getOrElse(1) { 0 }
+    val patch = parts.getOrElse(2) { 0 }
+    major * 1_000_000 + minor * 1_000 + patch
+}
+
 android {
     compileSdk = 35
 
@@ -12,8 +22,8 @@ android {
         applicationId = "helium314.keyboard.vibevoice"
         minSdk = 21
         targetSdk = 35
-        versionCode = 3501
-        versionName = "3.5"
+        versionCode = vibevoiceVersionCode
+        versionName = vibevoiceVersion
         ndk {
             abiFilters.clear()
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
@@ -52,7 +62,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".debug"
         }
-        base.archivesBaseName = "HeliBoard-VibeVoice_" + defaultConfig.versionName
+        base.archivesBaseName = "HeliBoard-VibeVoice_$vibevoiceVersion"
     }
 
     buildFeatures {

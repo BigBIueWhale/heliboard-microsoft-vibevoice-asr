@@ -17,7 +17,10 @@ GRADLE_WRAPPER_VERSION="8.14"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 
-APK_RELATIVE="app/build/outputs/apk/debug/HeliBoard-VibeVoice_3.5-debug.apk"
+VIBEVOICE_VERSION="${VIBEVOICE_VERSION:-0.0.0-dev}"
+export VIBEVOICE_VERSION
+
+APK_RELATIVE="app/build/outputs/apk/debug/HeliBoard-VibeVoice_${VIBEVOICE_VERSION}-debug.apk"
 APK_PATH="$PROJECT_DIR/$APK_RELATIVE"
 
 # ──────────────────────────────────────────────────────────────
