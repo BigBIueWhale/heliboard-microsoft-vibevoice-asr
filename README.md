@@ -146,12 +146,20 @@ All paths relative to `app/src/main/`:
 | Compose BOM | 2025.08.00 |
 | Build OS | Ubuntu 24.04.3 LTS, kernel 6.14.0-37-generic, x86_64 |
 
-### Building
+### Releases
+
+Releases are built automatically by GitHub Actions when a tag matching `vibevoice-v*` is pushed (e.g. `vibevoice-v0.1.0`). The version number from the tag flows end-to-end into the APK's `versionName`, `versionCode`, and filename.
+
+The CI builds a **debug** APK (signed with the auto-generated debug key). There is no release signing keystore configured, so a proper signed release build is not currently possible. The debug build does have minification enabled (for smaller APK size), but uses the `.debug` application ID suffix (`helium314.keyboard.vibevoice.debug`).
+
+### Building locally
+
+Set `VIBEVOICE_VERSION` to control the version baked into the APK. Without it, the version defaults to `0.0.0-dev`.
 
 Run the included build script from the repo root:
 
 ```bash
-./build.sh
+VIBEVOICE_VERSION=0.1.0 ./build.sh
 ```
 
 It validates your entire environment (JDK 17, Android SDK, NDK, platform, disk space, etc.) and fails with a detailed error message on the first problem it finds. On success it prints the APK path.
@@ -161,8 +169,9 @@ Or build manually:
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 export ANDROID_HOME=~/Android/Sdk
+export VIBEVOICE_VERSION=0.1.0
 ./gradlew assembleDebug
-# Output: app/build/outputs/apk/debug/HeliBoard-VibeVoice_3.5-debug.apk
+# Output: app/build/outputs/apk/debug/HeliBoard-VibeVoice_0.1.0-debug.apk
 ```
 
 ### Installing on your phone
