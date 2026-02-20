@@ -675,8 +675,23 @@ public class LatinIME extends InputMethodService implements
         mVoiceInputController = new helium314.keyboard.latin.voice.VoiceInputController(
                 this,
                 (kotlin.jvm.functions.Function1<String, kotlin.Unit>) text -> {
-                    // Commit transcribed text via the InputConnection
-                    mInputLogic.mConnection.commitText(text, 1);
+                    // Finish any existing composing text before inserting voice text.
+                    mInputLogic.mConnection.beginBatchEdit();
+                    mInputLogic.mConnection.finishComposingText();
+                    mInputLogic.mConnection.endBatchEdit();
+                    // Insert text character by character. Bulk insertion (single
+                    // commitText or setComposingText call with the full string)
+                    // does not work in apps that detect input by diffing the text
+                    // field value (e.g. RustDesk's Flutter TextFormField).
+                    // Character-by-character insertion ensures each character
+                    // triggers a separate text change notification, matching the
+                    // behavior of normal typing.
+                    for (int i = 0; i < text.length(); ) {
+                        final int codePoint = text.codePointAt(i);
+                        mInputLogic.mConnection.commitText(
+                                new String(Character.toChars(codePoint)), 1);
+                        i += Character.charCount(codePoint);
+                    }
                     mInputLogic.restartSuggestionsOnWordTouchedByCursor(
                             mSettings.getCurrent(),
                             mKeyboardSwitcher.getCurrentKeyboardScript());

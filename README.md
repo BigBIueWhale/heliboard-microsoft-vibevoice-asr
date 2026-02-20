@@ -35,9 +35,19 @@ Enter your server URL and auth token in **Settings > Voice Input**, then tap **T
 
 ![Voice Input settings](doc/voice_input_settings.jpg)
 
+## Building from source
+
+Run the included [`build.sh`](build.sh) script from the repository root:
+
+```bash
+VIBEVOICE_VERSION="0.1.0" ./build.sh
+```
+
+It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
+
 ## Installing
 
-Download the latest APK from the [Releases](https://github.com/BigBIueWhale/heliboard-microsoft-vibevoice-asr/releases) page, then:
+Download the latest APK from the [Releases](https://github.com/BigBIueWhale/heliboard-microsoft-vibevoice-asr/releases) page, or [build it from source](#building-from-source), then:
 
 1. Transfer the APK to your phone and install it (enable "Install from unknown sources" if prompted)
 2. Go to **Settings > System > Languages & input > On-screen keyboard** and enable **HeliBoard VibeVoice Debug**
@@ -76,7 +86,8 @@ All paths relative to `app/src/main/`:
 | File | Changes |
 |---|---|
 | `AndroidManifest.xml` | Added `RECORD_AUDIO` and `INTERNET` permissions, network security config, `VoicePermissionActivity` registration. |
-| `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. |
+| `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. Voice commit inserts text character by character for RustDesk compatibility (see [RustDesk compatibility](#rustdesk-compatibility)). |
+| `java/.../latin/inputlogic/InputLogic.java` | Clipboard paste (`onTextInput`) inserts text character by character for RustDesk compatibility. |
 | `java/.../latin/InputAttributes.java` | Removed conditions that hid the mic key when no system voice IME was installed. Voice key now shows on all non-password fields. |
 | `java/.../latin/settings/Settings.java` | Added `PREF_VIBEVOICE_SERVER_URL` and `PREF_VIBEVOICE_AUTH_TOKEN` preference keys. |
 | `java/.../latin/settings/Defaults.kt` | Added empty-string defaults for VibeVoice preferences. |
@@ -86,7 +97,31 @@ All paths relative to `app/src/main/`:
 
 ---
 
+## RustDesk compatibility
+
+Voice typing and clipboard paste now work when typing into a remote machine via [RustDesk](https://github.com/rustdesk/rustdesk) on Android.
+
+### The problem
+
+Android IMEs insert text via the `InputConnection` interface. Bulk text insertion — a single `commitText` or `setComposingText` call with the full string — fails silently in RustDesk's Flutter-based text field. The text never arrives on the remote machine. This affects both voice transcription and the keyboard's paste action.
+
+RustDesk detects keyboard input by diffing its hidden `TextFormField` value on each `onChanged` callback. Normal character-by-character typing works because each keystroke triggers a separate `onChanged` with a one-character difference. Bulk insertion fires at most one `onChanged` with a multi-character difference, which RustDesk does not reliably process.
+
+### The fix
+
+Both the voice input callback (`LatinIME.java`) and the text input / clipboard paste path (`InputLogic.onTextInput`) now commit text **one character at a time** in a loop, instead of inserting the full string in a single call. Each `commitText` triggers a separate `onChanged` in the target text field, so RustDesk's diff logic sees a one-character addition each time — exactly the same as normal typing.
+
+### Impact on other apps
+
+None. Committing characters individually produces the same end result as a single bulk `commitText`. The loop runs synchronously on the main thread, so there is no visible delay.
+
+---
+
 ## Release notes
+
+### vibevoice-v0.2.0
+
+- Voice typing and clipboard paste now work in [RustDesk](https://github.com/rustdesk/rustdesk) remote sessions (see [RustDesk compatibility](#rustdesk-compatibility))
 
 ### vibevoice-v0.1.0
 

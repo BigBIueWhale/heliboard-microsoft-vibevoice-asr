@@ -234,9 +234,18 @@ public final class InputLogic {
         if (SpaceState.PHANTOM == mSpaceState) {
             insertAutomaticSpaceIfOptionsAndTextAllow(settingsValues);
         }
-        mConnection.commitText(text, 1);
-        StatsUtils.onWordCommitUserTyped(mEnteredText, mWordComposer.isBatchMode());
+        // End the batch edit before text insertion so each character triggers
+        // a separate text change notification in the target app. Bulk text
+        // insertion (single commitText or setComposingText with the full string)
+        // does not work in apps that detect input by diffing the text field
+        // value (e.g. RustDesk's Flutter TextFormField).
         mConnection.endBatchEdit();
+        for (int i = 0; i < text.length(); ) {
+            final int codePoint = text.codePointAt(i);
+            mConnection.commitText(new String(Character.toChars(codePoint)), 1);
+            i += Character.charCount(codePoint);
+        }
+        StatsUtils.onWordCommitUserTyped(mEnteredText, mWordComposer.isBatchMode());
         // Space state must be updated before calling updateShiftState
         mSpaceState = SpaceState.NONE;
         mEnteredText = text;
