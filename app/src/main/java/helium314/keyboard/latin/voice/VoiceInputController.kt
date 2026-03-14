@@ -11,8 +11,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Handler
 import android.os.Looper
+import android.text.TextUtils
 import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.View
@@ -32,14 +35,15 @@ import java.io.File
 import java.util.concurrent.Executors
 
 /**
- * Orchestrates the full voice input lifecycle:
- *   1. Check microphone permission
- *   2. Show recording UI overlay on the keyboard
- *   3. Record audio via [AudioRecorder]
- *   4. Send to VibeVoice server via [VibeVoiceClient] (with retry)
- *   5. Show transcription result for user review
- *   6. Commit text only when user taps Insert
- *   7. Persist recordings to filesystem — never lose a recording
+ * Orchestrates the full voice input lifecycle with a state-driven overlay UI.
+ *
+ * The overlay is a single surface that renders whatever the current state dictates.
+ * There is no navigation stack — the state machine IS the UI truth.
+ *
+ * States: IDLE → LANDING → RECORDING → TRANSCRIBING → (back to LANDING)
+ *                       └→ RECORDINGS_LIST → (back to LANDING)
+ *
+ * Recordings persist on disk (never auto-deleted). The storage cap handles cleanup.
  */
 class VoiceInputController(
     private val context: Context,
@@ -49,7 +53,7 @@ class VoiceInputController(
 
     companion object {
         private const val TAG = "VoiceInputController"
-        private const val TRANSCRIPTION_TIMEOUT_MS = 600_000L  // 10 min for long recordings
+        private const val TRANSCRIPTION_TIMEOUT_MS = 600_000L
         private const val MAX_RETRY_ATTEMPTS = 3
         private const val RETRY_BASE_DELAY_MS = 2_000L
     }
@@ -57,128 +61,77 @@ class VoiceInputController(
     private val recorder = AudioRecorder()
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val store = RecordingStore(context)
+    val store = RecordingStore(context)
 
     private var overlayView: VoiceOverlayView? = null
     private var hostContainer: ViewGroup? = null
     private var recordingFile: File? = null
-    private var generation = 0  // Incremented on each session to discard stale callbacks
+    private var generation = 0
     private var timeoutRunnable: Runnable? = null
     private var backgroundMode = false
-    private var pendingResultText: String? = null
     private var activeClient: VibeVoiceClient? = null
 
-    enum class State { IDLE, RECORDING, TRANSCRIBING, RESULT_READY }
+    enum class State { IDLE, LANDING, RECORDING, TRANSCRIBING, RECORDINGS_LIST }
     var state = State.IDLE
         private set
 
-    /**
-     * Start voice input. If there's a pending recording/transcription, show it
-     * instead of starting a new recording. Pass [skipPendingCheck] = true to
-     * bypass this and always start a fresh recording.
-     */
+    // ── Public API (called from LatinIME) ────────────────────────────
+
+    /** Open the voice input overlay showing the landing menu. */
     @JvmOverloads
-    fun start(container: ViewGroup, skipPendingCheck: Boolean = false) {
-        if (state != State.IDLE) {
-            Log.w(TAG, "Voice input already active (state=$state)")
-            return
-        }
+    fun start(container: ViewGroup, skipChecks: Boolean = false) {
+        if (state != State.IDLE) return
 
-        // Check that VibeVoice is configured
-        if (!VibeVoiceClient.isConfigured(context)) {
-            Toast.makeText(context, R.string.vibevoice_not_configured, Toast.LENGTH_LONG).show()
-            return
-        }
-
-        // Check microphone permission
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            Toast.makeText(
-                context,
-                "Microphone permission required for voice input.\nGrant it in Settings \u2192 Apps \u2192 HeliBoard \u2192 Permissions.",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-
-        // Check for pending recordings before starting a new one
-        if (!skipPendingCheck) {
-            val pending = store.listRecordings().firstOrNull()
-            if (pending != null) {
-                if (pending.hasTranscription && pending.transcriptionText != null) {
-                    // Result ready — show it for insertion
-                    showResultOverlay(container, pending.wavFile, pending.transcriptionText)
-                    return
-                } else if (!pending.isTranscribing) {
-                    // WAV exists but no transcription — offer retry
-                    showPendingRetryOverlay(container, pending)
-                    return
-                }
-                // If currently transcribing, fall through to show that state
-                // (handled by reattachIfNeeded)
+        if (!skipChecks) {
+            if (!VibeVoiceClient.isConfigured(context)) {
+                Toast.makeText(context, R.string.vibevoice_not_configured, Toast.LENGTH_LONG).show()
+                return
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                Toast.makeText(context,
+                    "Microphone permission required.\nGrant it in Settings \u2192 Apps \u2192 HeliBoard \u2192 Permissions.",
+                    Toast.LENGTH_LONG).show()
+                return
             }
         }
 
         hostContainer = container
-        state = State.RECORDING
+        state = State.LANDING
 
-        // Show the recording overlay
-        val overlay = VoiceOverlayView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            setOnClickListener { stop() }
-        }
+        val overlay = VoiceOverlayView(context)
+        overlay.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
         overlayView = overlay
         container.addView(overlay)
-        overlay.showRecording()
-
-        // Start recording
-        try {
-            val outputFile = store.newRecordingFile()
-            recordingFile = outputFile
-            recorder.start(outputFile) { amplitude ->
-                mainHandler.post { overlay.updateAmplitude(amplitude) }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start recording", e)
-            cleanup()
-            Toast.makeText(context, "Failed to start recording: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
+        overlay.showLanding()
     }
 
     /** Stop recording and begin transcription. */
     fun stop() {
         if (state != State.RECORDING) return
         state = State.TRANSCRIBING
-
         recorder.stop()
         overlayView?.showTranscribing()
         startTranscription()
     }
 
-    /** Cancel voice input. Resets controller state but does NOT delete files. */
+    /** Universal dismiss/cancel. Files always stay on disk. */
     fun cancel() {
-        if (state == State.RECORDING) {
-            recorder.stop()
-        }
-        // Abort any in-flight HTTP request immediately
+        if (state == State.RECORDING) recorder.stop()
         activeClient?.abort()
-        // Files stay on disk — user can access via mic button or Settings
         cleanup()
     }
 
-    /**
-     * Called when the keyboard view is being hidden (onFinishInputView).
-     * Detaches the overlay but lets background work continue.
-     */
+    /** Keyboard view is being hidden. */
     fun detachOverlay() {
         when (state) {
             State.IDLE -> return
+            State.LANDING, State.RECORDINGS_LIST -> cleanup()
             State.RECORDING -> {
-                // Auto-stop recording and continue to transcription in background
                 recorder.stop()
                 backgroundMode = true
                 removeOverlayViews()
@@ -186,96 +139,50 @@ class VoiceInputController(
                 startTranscription()
             }
             State.TRANSCRIBING -> {
-                // Transcription continues on executor thread
                 backgroundMode = true
                 removeOverlayViews()
-            }
-            State.RESULT_READY -> {
-                // Result is on filesystem, nothing more to do
-                removeOverlayViews()
-                state = State.IDLE
-                backgroundMode = false
-                pendingResultText = null
-                recordingFile = null
             }
         }
     }
 
-    /**
-     * Called when the keyboard view becomes visible (onStartInputView).
-     * Re-shows the transcribing overlay if work is in progress.
-     */
+    /** Keyboard view became visible again. */
     fun reattachIfNeeded(container: ViewGroup) {
         if (state == State.TRANSCRIBING && backgroundMode) {
             backgroundMode = false
             hostContainer = container
-            val overlay = VoiceOverlayView(context).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-            }
+            val overlay = VoiceOverlayView(context)
+            overlay.layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
             overlayView = overlay
             container.addView(overlay)
             overlay.showTranscribing()
         }
-        // Don't auto-show RESULT_READY — wait for mic button tap
     }
 
-    // ---- User action handlers (called from overlay buttons) ----
+    // ── Internal: recording ──────────────────────────────────────────
 
-    /** Insert transcription into the current text field and clean up files. */
-    fun insertResult() {
-        val text = pendingResultText ?: return
-        if (isEditorConnected()) {
-            commitText(text)
-            Log.i(TAG, "Transcription inserted (${text.length} chars)")
-        } else {
-            // Editor not connected — fall back to clipboard
-            copyToClipboard(text)
-            Toast.makeText(context, "Editor disconnected — copied to clipboard", Toast.LENGTH_LONG).show()
-            Log.i(TAG, "Editor disconnected, copied to clipboard instead")
+    internal fun beginRecording() {
+        state = State.RECORDING
+        try {
+            val outputFile = store.newRecordingFile()
+            recordingFile = outputFile
+            overlayView?.showRecording()
+            recorder.start(outputFile) { amplitude ->
+                mainHandler.post { overlayView?.updateAmplitude(amplitude) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start recording", e)
+            Toast.makeText(context, "Failed to start recording: ${e.message}", Toast.LENGTH_SHORT).show()
+            transitionToLanding()
         }
-        recordingFile?.let { store.delete(it) }
-        cleanup()
     }
 
-    /** Copy transcription to clipboard and clean up files. */
-    fun copyResult() {
-        val text = pendingResultText ?: return
-        copyToClipboard(text)
-        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-        recordingFile?.let { store.delete(it) }
-        cleanup()
-    }
-
-    /** Discard the recording and transcription. */
-    fun discardResult() {
-        recordingFile?.let { store.delete(it) }
-        cleanup()
-    }
-
-    /** Retry transcription of the current recording. */
-    fun retryTranscription() {
-        if (recordingFile == null) return
-        state = State.TRANSCRIBING
-        overlayView?.showTranscribing()
-        startTranscription()
-    }
-
-    /** Start a new recording, leaving any old files on disk. */
-    fun startNewRecording(container: ViewGroup) {
-        cleanup()
-        start(container, skipPendingCheck = true)
-    }
-
-    // ---- Private implementation ----
+    // ── Internal: transcription ──────────────────────────────────────
 
     private fun startTranscription() {
-        val audioFile = recordingFile ?: run {
-            cleanup()
-            return
-        }
+        val audioFile = recordingFile ?: run { transitionToLanding(); return }
 
         store.markTranscribing(audioFile)
 
@@ -284,7 +191,7 @@ class VoiceInputController(
             if (currentGen == generation && state == State.TRANSCRIBING) {
                 Toast.makeText(context, "Transcription timed out", Toast.LENGTH_SHORT).show()
                 store.clearTranscribing(audioFile)
-                cleanup()
+                transitionToLanding()
             }
         }
         timeoutRunnable = timeout
@@ -294,7 +201,7 @@ class VoiceInputController(
         if (client == null) {
             Toast.makeText(context, R.string.vibevoice_not_configured, Toast.LENGTH_SHORT).show()
             store.clearTranscribing(audioFile)
-            cleanup()
+            transitionToLanding()
             return
         }
         activeClient = client
@@ -304,14 +211,12 @@ class VoiceInputController(
 
             for (attempt in 1..MAX_RETRY_ATTEMPTS) {
                 if (generation != currentGen) {
-                    // Cancelled
                     store.clearTranscribing(audioFile)
                     return@execute
                 }
                 result = client.transcribe(audioFile)
                 if (result != null) break
                 if (attempt < MAX_RETRY_ATTEMPTS) {
-                    // Check cancellation before sleeping to avoid unnecessary delay
                     if (generation != currentGen) {
                         store.clearTranscribing(audioFile)
                         return@execute
@@ -325,87 +230,105 @@ class VoiceInputController(
 
             mainHandler.post {
                 if (currentGen != generation) return@post
+                timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+                timeoutRunnable = null
+                activeClient = null
 
                 if (result != null && result.text.isNotBlank()) {
-                    // Save transcription to filesystem
                     store.saveTranscription(audioFile, result.text)
+                    store.markDone(audioFile)
 
                     if (!backgroundMode) {
-                        // Overlay is attached — show result for user review
-                        pendingResultText = result.text
-                        state = State.RESULT_READY
-                        overlayView?.showResult(result.text)
-                        Log.i(TAG, "Transcription ready for review (${result.text.length} chars)")
+                        if (isEditorConnected()) {
+                            commitText(result.text)
+                            Log.i(TAG, "Transcription auto-inserted (${result.text.length} chars)")
+                        } else {
+                            copyToClipboard(result.text)
+                            Toast.makeText(context, "Copied to clipboard (editor disconnected)", Toast.LENGTH_LONG).show()
+                        }
+                        transitionToLanding()
                     } else {
-                        // Keyboard is hidden — result saved to filesystem
                         Toast.makeText(context, "Transcription ready — tap mic to insert", Toast.LENGTH_LONG).show()
-                        Log.i(TAG, "Transcription saved to filesystem (background)")
                         cleanup()
                     }
                 } else if (result != null) {
-                    // Empty/silence — nothing to save
                     Log.i(TAG, "Transcription was empty/silence")
                     store.delete(audioFile)
-                    cleanup()
+                    if (!backgroundMode) transitionToLanding() else cleanup()
                 } else {
-                    // All retries failed — keep the WAV for future retry
                     Toast.makeText(context, "Transcription failed — recording saved", Toast.LENGTH_LONG).show()
-                    Log.w(TAG, "All $MAX_RETRY_ATTEMPTS attempts failed, recording kept: ${audioFile.absolutePath}")
-                    cleanup()
+                    Log.w(TAG, "All $MAX_RETRY_ATTEMPTS attempts failed")
+                    if (!backgroundMode) transitionToLanding() else cleanup()
                 }
             }
         }
     }
 
-    private fun showResultOverlay(container: ViewGroup, wavFile: File, text: String) {
-        hostContainer = container
-        recordingFile = wavFile
-        pendingResultText = text
-        state = State.RESULT_READY
+    // ── Internal: recordings list actions ─────────────────────────────
 
-        val overlay = VoiceOverlayView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+    internal fun onListInsert(info: RecordingInfo) {
+        val text = info.transcriptionText ?: return
+        if (isEditorConnected()) {
+            commitText(text)
+            if (!info.isDone) store.markDone(info.wavFile)
+            Toast.makeText(context, "Inserted", Toast.LENGTH_SHORT).show()
+        } else {
+            copyToClipboard(text)
+            Toast.makeText(context, "Copied to clipboard (editor disconnected)", Toast.LENGTH_SHORT).show()
         }
-        overlayView = overlay
-        container.addView(overlay)
-        overlay.showResult(text)
+        overlayView?.refreshRecordingsList()
     }
 
-    private fun showPendingRetryOverlay(container: ViewGroup, info: RecordingInfo) {
-        hostContainer = container
-        recordingFile = info.wavFile
-        state = State.RESULT_READY  // Use RESULT_READY to block new recordings via state check
+    internal fun onListCopy(info: RecordingInfo) {
+        val text = info.transcriptionText ?: return
+        copyToClipboard(text)
+        if (!info.isDone) store.markDone(info.wavFile)
+        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+        overlayView?.refreshRecordingsList()
+    }
 
-        val overlay = VoiceOverlayView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-        overlayView = overlay
-        container.addView(overlay)
-        overlay.showPendingRetry(info)
+    internal fun onListTranscribe(info: RecordingInfo) {
+        recordingFile = info.wavFile
+        state = State.TRANSCRIBING
+        overlayView?.showTranscribing()
+        startTranscription()
+    }
+
+    internal fun onListDelete(info: RecordingInfo) {
+        store.delete(info.wavFile)
+        overlayView?.refreshRecordingsList()
+    }
+
+    internal fun onListBack() {
+        state = State.LANDING
+        overlayView?.showLanding()
+    }
+
+    // ── Internal: state transitions ──────────────────────────────────
+
+    private fun transitionToLanding() {
+        state = State.LANDING
+        recordingFile = null
+        backgroundMode = false
+        activeClient = null
+        timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        timeoutRunnable = null
+        overlayView?.showLanding()
     }
 
     private fun cleanup() {
         generation++
         state = State.IDLE
         backgroundMode = false
-        pendingResultText = null
+        recordingFile = null
         activeClient = null
         timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         timeoutRunnable = null
         removeOverlayViews()
-        recordingFile = null
     }
 
     private fun removeOverlayViews() {
-        overlayView?.let { overlay ->
-            hostContainer?.removeView(overlay)
-        }
+        overlayView?.let { hostContainer?.removeView(it) }
         overlayView = null
         hostContainer = null
     }
@@ -415,350 +338,413 @@ class VoiceInputController(
         clipboard.setPrimaryClip(ClipData.newPlainText("VibeVoice Transcription", text))
     }
 
-    // ============================================================================
-    // Overlay View
-    // ============================================================================
+    // ════════════════════════════════════════════════════════════════════
+    // Overlay View — state-driven, single surface
+    // ════════════════════════════════════════════════════════════════════
 
-    /**
-     * Custom View that overlays the keyboard during voice input.
-     * Supports multiple states: recording, transcribing, result ready, pending retry.
-     */
-    private inner class VoiceOverlayView(
-        context: Context,
-    ) : FrameLayout(context) {
+    private inner class VoiceOverlayView(context: Context) : FrameLayout(context) {
 
         private val colors = Settings.getValues().mColors
         private val keyColor = colors.get(ColorType.KEY_TEXT)
         private val bgColor = colors.get(ColorType.MAIN_BACKGROUND)
+        private val dimColor = Color.argb(120, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor))
 
-        private val innerLayout: LinearLayout
-        private val micText: TextView
-        private val amplitudeView: AmplitudeBarsView
-        private val pulsingDotsView: PulsingDotsView
-        private val statusText: TextView
-        private val hintText: TextView
-
-        // Result-ready views
-        private val resultScroll: ScrollView
-        private val resultText: TextView
-        private val resultWordCount: TextView
-        private val resultButtonRow: LinearLayout
-        private val insertButton: TextView
-        private val copyButton: TextView
-        private val discardButton: TextView
-
-        // Pending-retry views
-        private val pendingInfoText: TextView
-        private val pendingButtonRow: LinearLayout
-        private val retryButton: TextView
-        private val newRecordingButton: TextView
-        private val pendingDiscardButton: TextView
-
-        private var pulseAnimator: ValueAnimator? = null
+        private val contentFrame: FrameLayout
 
         init {
-            setBackgroundColor(
-                Color.argb(230, Color.red(bgColor), Color.green(bgColor), Color.blue(bgColor))
-            )
+            setBackgroundColor(Color.argb(230, Color.red(bgColor), Color.green(bgColor), Color.blue(bgColor)))
+            contentFrame = FrameLayout(context).apply {
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            }
+            addView(contentFrame)
+        }
 
-            innerLayout = LinearLayout(context).apply {
+        // ── Landing ─────────────────────────────────────────────
+
+        fun showLanding() {
+            contentFrame.removeAllViews()
+            val count = this@VoiceInputController.store.listRecordings().size
+
+            val layout = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-                setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
             }
 
-            // Mic icon
-            micText = TextView(context).apply {
+            // Mic emoji
+            layout.addView(TextView(context).apply {
                 text = "\uD83C\uDF99"
                 textSize = 48f
                 gravity = Gravity.CENTER
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
+                layoutParams = linParams(bottomMargin = 20)
+            })
+
+            // "New Recording" button
+            layout.addView(makeStyledButton("New Recording", primary = true).apply {
+                layoutParams = linParams(width = dpToPx(220), bottomMargin = 12)
+                setOnClickListener { this@VoiceInputController.beginRecording() }
+            })
+
+            // "Recordings (N)" button
+            val recLabel = if (count > 0) "Recordings ($count)" else "Recordings"
+            layout.addView(makeStyledButton(recLabel, primary = false).apply {
+                layoutParams = linParams(width = dpToPx(220))
+                setOnClickListener {
+                    this@VoiceInputController.state = State.RECORDINGS_LIST
+                    showRecordingsList()
+                }
+            })
+
+            contentFrame.addView(layout)
+        }
+
+        // ── Recording ───────────────────────────────────────────
+
+        private var amplitudeView: AmplitudeBarsView? = null
+        private var pulseAnimator: ValueAnimator? = null
+
+        fun showRecording() {
+            contentFrame.removeAllViews()
+            stopPulse()
+
+            val layout = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            }
+
+            layout.addView(TextView(context).apply {
+                text = "\uD83C\uDF99"
+                textSize = 48f
+                gravity = Gravity.CENTER
+                layoutParams = linParams(bottomMargin = 16)
+            })
+
+            val amp = AmplitudeBarsView(context).apply {
+                layoutParams = linParams(
+                    width = LinearLayout.LayoutParams.MATCH_PARENT,
+                    height = dpToPx(40),
+                    leftMargin = 40, rightMargin = 40, bottomMargin = 12
                 )
-                lp.bottomMargin = 16
-                layoutParams = lp
             }
+            amplitudeView = amp
+            layout.addView(amp)
 
-            // Amplitude visualization
-            amplitudeView = AmplitudeBarsView(context).apply {
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dpToPx(40)
-                )
-                lp.leftMargin = dpToPx(40)
-                lp.rightMargin = dpToPx(40)
-                lp.bottomMargin = dpToPx(12)
-                layoutParams = lp
-            }
-
-            // Pulsing dots
-            pulsingDotsView = PulsingDotsView(context).apply {
-                val lp = LinearLayout.LayoutParams(dpToPx(80), dpToPx(40))
-                lp.bottomMargin = dpToPx(12)
-                layoutParams = lp
-                visibility = View.GONE
-            }
-
-            // Status label
-            statusText = TextView(context).apply {
+            layout.addView(TextView(context).apply {
                 text = "Listening..."
                 textSize = 16f
                 setTextColor(keyColor)
                 gravity = Gravity.CENTER
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                lp.bottomMargin = dpToPx(4)
-                layoutParams = lp
-            }
+                layoutParams = linParams(bottomMargin = 4)
+            })
 
-            hintText = TextView(context).apply {
+            layout.addView(TextView(context).apply {
                 text = "Tap to stop"
                 textSize = 12f
-                setTextColor(Color.argb(150, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor)))
+                setTextColor(dimColor)
                 gravity = Gravity.CENTER
-            }
+            })
 
-            // ---- Result-ready views ----
-
-            resultText = TextView(context).apply {
-                textSize = 14f
-                setTextColor(keyColor)
-                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
-            }
-
-            resultScroll = ScrollView(context).apply {
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    0, 1f  // weight = 1 to fill available space
-                )
-                lp.bottomMargin = dpToPx(8)
-                layoutParams = lp
-                addView(resultText)
-                visibility = View.GONE
-            }
-
-            resultWordCount = TextView(context).apply {
-                textSize = 12f
-                setTextColor(Color.argb(150, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor)))
-                gravity = Gravity.CENTER
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                lp.bottomMargin = dpToPx(8)
-                layoutParams = lp
-                visibility = View.GONE
-            }
-
-            insertButton = makeButton("Insert")
-            copyButton = makeButton("Copy")
-            discardButton = makeButton("Discard")
-
-            resultButtonRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                layoutParams = lp
-                addView(insertButton)
-                addView(copyButton)
-                addView(discardButton)
-                visibility = View.GONE
-            }
-
-            insertButton.setOnClickListener { this@VoiceInputController.insertResult() }
-            copyButton.setOnClickListener { this@VoiceInputController.copyResult() }
-            discardButton.setOnClickListener { this@VoiceInputController.discardResult() }
-
-            // ---- Pending-retry views ----
-
-            pendingInfoText = TextView(context).apply {
-                textSize = 14f
-                setTextColor(keyColor)
-                gravity = Gravity.CENTER
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                lp.bottomMargin = dpToPx(12)
-                layoutParams = lp
-                visibility = View.GONE
-            }
-
-            retryButton = makeButton("Retry")
-            newRecordingButton = makeButton("New Recording")
-            pendingDiscardButton = makeButton("Discard")
-
-            pendingButtonRow = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                layoutParams = lp
-                addView(retryButton)
-                addView(newRecordingButton)
-                addView(pendingDiscardButton)
-                visibility = View.GONE
-            }
-
-            retryButton.setOnClickListener { this@VoiceInputController.retryTranscription() }
-            newRecordingButton.setOnClickListener {
-                val container = hostContainer ?: return@setOnClickListener
-                this@VoiceInputController.startNewRecording(container)
-            }
-            pendingDiscardButton.setOnClickListener { this@VoiceInputController.discardResult() }
-
-            // Assemble layout
-            innerLayout.addView(micText)
-            innerLayout.addView(amplitudeView)
-            innerLayout.addView(pulsingDotsView)
-            innerLayout.addView(statusText)
-            innerLayout.addView(hintText)
-            innerLayout.addView(resultScroll)
-            innerLayout.addView(resultWordCount)
-            innerLayout.addView(resultButtonRow)
-            innerLayout.addView(pendingInfoText)
-            innerLayout.addView(pendingButtonRow)
-            addView(innerLayout)
-        }
-
-        fun showRecording() {
-            micText.visibility = View.VISIBLE
-            amplitudeView.visibility = View.VISIBLE
-            pulsingDotsView.visibility = View.GONE
-            statusText.text = "Listening..."
-            statusText.visibility = View.VISIBLE
-            hintText.text = "Tap to stop"
-            hintText.visibility = View.VISIBLE
-            resultScroll.visibility = View.GONE
-            resultWordCount.visibility = View.GONE
-            resultButtonRow.visibility = View.GONE
-            pendingInfoText.visibility = View.GONE
-            pendingButtonRow.visibility = View.GONE
-            startPulse()
+            contentFrame.addView(layout)
             setOnClickListener { this@VoiceInputController.stop() }
-        }
-
-        fun showTranscribing() {
-            micText.visibility = View.VISIBLE
-            amplitudeView.visibility = View.GONE
-            pulsingDotsView.visibility = View.VISIBLE
-            pulsingDotsView.startAnimation()
-            statusText.text = "Transcribing..."
-            statusText.visibility = View.VISIBLE
-            hintText.text = ""
-            hintText.visibility = View.GONE
-            resultScroll.visibility = View.GONE
-            resultWordCount.visibility = View.GONE
-            resultButtonRow.visibility = View.GONE
-            pendingInfoText.visibility = View.GONE
-            pendingButtonRow.visibility = View.GONE
-            stopPulse()
-            // Show cancel as a single button
-            setOnClickListener(null)
-            // Repurpose discard button row as cancel
-            discardButton.text = "Cancel"
-            discardButton.setOnClickListener { this@VoiceInputController.cancel() }
-            resultButtonRow.removeAllViews()
-            resultButtonRow.addView(discardButton)
-            resultButtonRow.visibility = View.VISIBLE
-        }
-
-        fun showResult(text: String) {
-            micText.visibility = View.GONE
-            amplitudeView.visibility = View.GONE
-            pulsingDotsView.visibility = View.GONE
-            pulsingDotsView.stopAnimation()
-            statusText.text = "Transcription ready"
-            statusText.visibility = View.VISIBLE
-            hintText.visibility = View.GONE
-            stopPulse()
-
-            resultText.text = text
-            resultScroll.visibility = View.VISIBLE
-
-            val wordCount = text.trim().split("\\s+".toRegex()).size
-            resultWordCount.text = "$wordCount words"
-            resultWordCount.visibility = View.VISIBLE
-
-            // Reset button row to result buttons
-            resultButtonRow.removeAllViews()
-            insertButton.text = "Insert"
-            insertButton.setOnClickListener { this@VoiceInputController.insertResult() }
-            copyButton.text = "Copy"
-            copyButton.setOnClickListener { this@VoiceInputController.copyResult() }
-            discardButton.text = "Discard"
-            discardButton.setOnClickListener { this@VoiceInputController.discardResult() }
-            resultButtonRow.addView(insertButton)
-            resultButtonRow.addView(copyButton)
-            resultButtonRow.addView(discardButton)
-            resultButtonRow.visibility = View.VISIBLE
-
-            pendingInfoText.visibility = View.GONE
-            pendingButtonRow.visibility = View.GONE
-            setOnClickListener(null)
-        }
-
-        fun showPendingRetry(info: RecordingInfo) {
-            micText.visibility = View.VISIBLE
-            amplitudeView.visibility = View.GONE
-            pulsingDotsView.visibility = View.GONE
-            statusText.text = "Unsent recording"
-            statusText.visibility = View.VISIBLE
-            hintText.visibility = View.GONE
-            resultScroll.visibility = View.GONE
-            resultWordCount.visibility = View.GONE
-            resultButtonRow.visibility = View.GONE
-            stopPulse()
-
-            val ago = DateUtils.getRelativeTimeSpanString(
-                info.timestamp, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
-            )
-            val sizeMb = String.format("%.1f", info.sizeBytes / (1024.0 * 1024.0))
-            pendingInfoText.text = "Recorded $ago ($sizeMb MB)"
-            pendingInfoText.visibility = View.VISIBLE
-            pendingButtonRow.visibility = View.VISIBLE
-            setOnClickListener(null)
+            startPulse()
         }
 
         fun updateAmplitude(amplitude: Float) {
-            amplitudeView.setAmplitude(amplitude)
+            amplitudeView?.setAmplitude(amplitude)
         }
 
-        private fun makeButton(label: String): TextView {
-            return TextView(context).apply {
-                text = label
-                textSize = 14f
+        // ── Transcribing ────────────────────────────────────────
+
+        fun showTranscribing() {
+            contentFrame.removeAllViews()
+            stopPulse()
+            setOnClickListener(null)
+
+            val layout = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            }
+
+            layout.addView(TextView(context).apply {
+                text = "\uD83C\uDF99"
+                textSize = 48f
+                gravity = Gravity.CENTER
+                layoutParams = linParams(bottomMargin = 16)
+            })
+
+            val dots = PulsingDotsView(context).apply {
+                layoutParams = linParams(width = dpToPx(80), height = dpToPx(40), bottomMargin = 12)
+            }
+            layout.addView(dots)
+            dots.startAnimation()
+
+            layout.addView(TextView(context).apply {
+                text = "Transcribing..."
+                textSize = 16f
                 setTextColor(keyColor)
                 gravity = Gravity.CENTER
-                setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
+                layoutParams = linParams(bottomMargin = 12)
+            })
+
+            layout.addView(makeStyledButton("Cancel", primary = false).apply {
+                setOnClickListener { this@VoiceInputController.cancel() }
+            })
+
+            contentFrame.addView(layout)
+        }
+
+        // ── Recordings List ─────────────────────────────────────
+
+        fun showRecordingsList() {
+            contentFrame.removeAllViews()
+            stopPulse()
+            setOnClickListener(null)
+
+            val recordings = this@VoiceInputController.store.listRecordings()
+
+            val root = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            }
+
+            // Header
+            val header = FrameLayout(context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+            }
+            header.addView(makeStyledButton("\u2190 Back", primary = false).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.START or Gravity.CENTER_VERTICAL
+                )
+                setOnClickListener { this@VoiceInputController.onListBack() }
+            })
+            header.addView(TextView(context).apply {
+                text = "Recordings"
+                textSize = 16f
+                setTextColor(keyColor)
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER
+                )
+            })
+            root.addView(header)
+
+            // Divider
+            root.addView(View(context).apply {
+                setBackgroundColor(Color.argb(40, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor)))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
+            })
+
+            if (recordings.isEmpty()) {
+                root.addView(TextView(context).apply {
+                    text = "No recordings yet"
+                    textSize = 14f
+                    setTextColor(dimColor)
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                    )
+                })
+            } else {
+                val scroll = ScrollView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                    )
+                    isVerticalScrollBarEnabled = true
+                }
+                val list = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+                }
+                for (info in recordings) {
+                    list.addView(buildRecordingCard(info))
+                }
+                scroll.addView(list)
+                root.addView(scroll)
+            }
+
+            contentFrame.addView(root)
+        }
+
+        fun refreshRecordingsList() {
+            if (this@VoiceInputController.state == State.RECORDINGS_LIST) {
+                showRecordingsList()
+            }
+        }
+
+        private fun buildRecordingCard(info: RecordingInfo): View {
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dpToPx(10), dpToPx(8), dpToPx(10), dpToPx(8))
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                lp.bottomMargin = dpToPx(6)
+                layoutParams = lp
+                background = GradientDrawable().apply {
+                    setColor(Color.argb(20, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor)))
+                    cornerRadius = dpToPx(8).toFloat()
+                }
+            }
+
+            // Row 1: timestamp + size
+            val ago = DateUtils.getRelativeTimeSpanString(
+                info.timestamp, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
+            )
+            val sizeMb = String.format("%.1f MB", info.sizeBytes / (1024.0 * 1024.0))
+            card.addView(TextView(context).apply {
+                text = "$ago  \u2022  $sizeMb"
+                textSize = 13f
+                setTextColor(keyColor)
+            })
+
+            // Row 2: status
+            val status = when {
+                info.isTranscribing -> "Transcribing..."
+                info.isDone -> "Done \u2713"
+                info.hasTranscription -> "Ready to insert"
+                else -> "Pending"
+            }
+            val statusColor = when {
+                info.isDone -> Color.argb(200, 80, 180, 80)
+                info.hasTranscription -> Color.argb(200, 80, 140, 220)
+                info.isTranscribing -> dimColor
+                else -> Color.argb(200, 220, 180, 60)
+            }
+            card.addView(TextView(context).apply {
+                text = status
+                textSize = 12f
+                setTextColor(statusColor)
+                layoutParams = linParams(topMargin = 2)
+            })
+
+            // Row 3: preview
+            if (info.transcriptionText != null) {
+                card.addView(TextView(context).apply {
+                    text = info.transcriptionText
+                    textSize = 11f
+                    setTextColor(dimColor)
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                    layoutParams = linParams(topMargin = 4)
+                })
+            }
+
+            // Row 4: action buttons
+            if (!info.isTranscribing) {
+                val buttons = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.END
+                    layoutParams = linParams(topMargin = 6, width = LinearLayout.LayoutParams.MATCH_PARENT)
+                }
+
+                if (info.hasTranscription) {
+                    buttons.addView(makeSmallButton("Insert").apply {
+                        setOnClickListener { this@VoiceInputController.onListInsert(info) }
+                    })
+                    buttons.addView(makeSmallButton("Copy").apply {
+                        setOnClickListener { this@VoiceInputController.onListCopy(info) }
+                    })
+                } else {
+                    buttons.addView(makeSmallButton("Transcribe").apply {
+                        setOnClickListener { this@VoiceInputController.onListTranscribe(info) }
+                    })
+                }
+                buttons.addView(makeSmallButton("Delete").apply {
+                    setOnClickListener { this@VoiceInputController.onListDelete(info) }
+                })
+
+                card.addView(buttons)
+            }
+
+            return card
+        }
+
+        // ── Button helpers ──────────────────────────────────────
+
+        private fun makeStyledButton(label: String, primary: Boolean): TextView {
+            return TextView(context).apply {
+                text = label
+                textSize = if (primary) 16f else 14f
+                setTextColor(keyColor)
+                gravity = Gravity.CENTER
+                setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10))
+                background = makeButtonBg(if (primary) 35 else 20)
+                isClickable = true
+                isFocusable = true
+            }
+        }
+
+        private fun makeSmallButton(label: String): TextView {
+            return TextView(context).apply {
+                text = label
+                textSize = 12f
+                setTextColor(keyColor)
+                gravity = Gravity.CENTER
+                setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5))
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 )
                 lp.marginStart = dpToPx(4)
-                lp.marginEnd = dpToPx(4)
                 layoutParams = lp
+                background = makeButtonBg(20)
+                isClickable = true
+                isFocusable = true
             }
         }
 
+        private fun makeButtonBg(normalAlpha: Int): StateListDrawable {
+            val normal = GradientDrawable().apply {
+                setColor(Color.argb(normalAlpha, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor)))
+                cornerRadius = dpToPx(8).toFloat()
+            }
+            val pressed = GradientDrawable().apply {
+                setColor(Color.argb(normalAlpha + 30, Color.red(keyColor), Color.green(keyColor), Color.blue(keyColor)))
+                cornerRadius = dpToPx(8).toFloat()
+            }
+            return StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_pressed), pressed)
+                addState(intArrayOf(), normal)
+            }
+        }
+
+        // ── Layout helpers ──────────────────────────────────────
+
+        private fun linParams(
+            width: Int = LinearLayout.LayoutParams.WRAP_CONTENT,
+            height: Int = LinearLayout.LayoutParams.WRAP_CONTENT,
+            topMargin: Int = 0, bottomMargin: Int = 0,
+            leftMargin: Int = 0, rightMargin: Int = 0,
+        ): LinearLayout.LayoutParams {
+            return LinearLayout.LayoutParams(width, height).apply {
+                this.topMargin = dpToPx(topMargin)
+                this.bottomMargin = dpToPx(bottomMargin)
+                this.leftMargin = dpToPx(leftMargin)
+                this.rightMargin = dpToPx(rightMargin)
+            }
+        }
+
+        // ── Animations ──────────────────────────────────────────
+
         private fun startPulse() {
-            pulseAnimator = ValueAnimator.ofFloat(1f, 1.1f, 1f).apply {
+            pulseAnimator = ValueAnimator.ofFloat(1f, 1.08f, 1f).apply {
                 duration = 1200
                 repeatCount = ValueAnimator.INFINITE
                 interpolator = DecelerateInterpolator()
                 addUpdateListener {
-                    val scale = it.animatedValue as Float
-                    scaleX = scale
-                    scaleY = scale
+                    val s = it.animatedValue as Float
+                    scaleX = s; scaleY = s
                 }
                 start()
             }
@@ -767,109 +753,73 @@ class VoiceInputController(
         private fun stopPulse() {
             pulseAnimator?.cancel()
             pulseAnimator = null
-            scaleX = 1f
-            scaleY = 1f
+            scaleX = 1f; scaleY = 1f
         }
 
-        private fun dpToPx(dp: Int): Int {
-            return (dp * context.resources.displayMetrics.density).toInt()
-        }
+        private fun dpToPx(dp: Int) = (dp * context.resources.displayMetrics.density).toInt()
     }
 
-    /**
-     * A simple amplitude bar visualizer — draws vertical bars whose height
-     * responds to the current microphone amplitude.
-     */
+    // ════════════════════════════════════════════════════════════════════
+    // Amplitude bars
+    // ════════════════════════════════════════════════════════════════════
+
     private class AmplitudeBarsView(context: Context) : View(context) {
         private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            val colors = Settings.getValues().mColors
-            color = colors.get(ColorType.KEY_TEXT)
+            color = Settings.getValues().mColors.get(ColorType.KEY_TEXT)
             alpha = 180
             style = Paint.Style.FILL
         }
         private val barCount = 24
         private val barWidthFraction = 0.6f
-        private val amplitudeHistory = FloatArray(barCount)
-        private var writeIndex = 0
-        private val barRect = RectF()
+        private val history = FloatArray(barCount)
+        private var idx = 0
+        private val r = RectF()
 
-        fun setAmplitude(amplitude: Float) {
-            amplitudeHistory[writeIndex % barCount] = amplitude
-            writeIndex++
-            invalidate()
-        }
+        fun setAmplitude(a: Float) { history[idx++ % barCount] = a; invalidate() }
 
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            val slotWidth = w / barCount
-            val barWidth = slotWidth * barWidthFraction
-            val gap = (slotWidth - barWidth) / 2f
-            val minBarHeight = h * 0.08f
-
+        override fun onDraw(c: Canvas) {
+            val w = width.toFloat(); val h = height.toFloat()
+            val slot = w / barCount; val bw = slot * barWidthFraction
+            val gap = (slot - bw) / 2f; val minH = h * 0.08f
             for (i in 0 until barCount) {
-                val idx = (writeIndex + i) % barCount
-                val amp = amplitudeHistory[idx]
-                val barHeight = minBarHeight + amp * (h - minBarHeight)
-                val x = i * slotWidth + gap
-                val top = (h - barHeight) / 2f
-                barRect.set(x, top, x + barWidth, top + barHeight)
-                canvas.drawRoundRect(barRect, barWidth / 2, barWidth / 2, barPaint)
+                val amp = history[(idx + i) % barCount]
+                val bh = minH + amp * (h - minH)
+                val x = i * slot + gap; val top = (h - bh) / 2f
+                r.set(x, top, x + bw, top + bh)
+                c.drawRoundRect(r, bw / 2, bw / 2, barPaint)
             }
         }
     }
 
-    /**
-     * Draws 3 pulsing dots with staggered sine-wave scale/alpha animation.
-     * Shown during the TRANSCRIBING state.
-     */
+    // ════════════════════════════════════════════════════════════════════
+    // Pulsing dots
+    // ════════════════════════════════════════════════════════════════════
+
     private class PulsingDotsView(context: Context) : View(context) {
-        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            val colors = Settings.getValues().mColors
-            color = colors.get(ColorType.KEY_TEXT)
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Settings.getValues().mColors.get(ColorType.KEY_TEXT)
             style = Paint.Style.FILL
         }
-        private val dotCount = 3
-        private val cycleDuration = 1200L
-        private var animator: ValueAnimator? = null
+        private var anim: ValueAnimator? = null
         private var phase = 0f
 
         fun startAnimation() {
-            animator?.cancel()
-            animator = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = cycleDuration
-                repeatCount = ValueAnimator.INFINITE
-                addUpdateListener {
-                    phase = it.animatedValue as Float
-                    invalidate()
-                }
+            anim?.cancel()
+            anim = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 1200; repeatCount = ValueAnimator.INFINITE
+                addUpdateListener { phase = it.animatedValue as Float; invalidate() }
                 start()
             }
         }
 
-        fun stopAnimation() {
-            animator?.cancel()
-            animator = null
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            val baseRadius = h * 0.15f
-            val spacing = w / (dotCount + 1)
-
-            for (i in 0 until dotCount) {
-                val stagger = i * 0.2f
-                val t = ((phase + stagger) % 1f) * Math.PI.toFloat() * 2f
-                val scale = 0.5f + 0.5f * kotlin.math.sin(t)
-                val alpha = (100 + 155 * scale).toInt()
-
-                dotPaint.alpha = alpha
-                val cx = spacing * (i + 1)
-                val cy = h / 2f
-                canvas.drawCircle(cx, cy, baseRadius * (0.7f + 0.3f * scale), dotPaint)
+        override fun onDraw(c: Canvas) {
+            val w = width.toFloat(); val h = height.toFloat()
+            val r = h * 0.15f; val sp = w / 4
+            for (i in 0..2) {
+                val t = ((phase + i * 0.2f) % 1f) * Math.PI.toFloat() * 2f
+                val s = 0.5f + 0.5f * kotlin.math.sin(t)
+                paint.alpha = (100 + 155 * s).toInt()
+                c.drawCircle(sp * (i + 1), h / 2, r * (0.7f + 0.3f * s), paint)
             }
         }
     }

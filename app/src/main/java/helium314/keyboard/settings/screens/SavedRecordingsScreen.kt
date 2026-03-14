@@ -133,7 +133,8 @@ private fun RecordingCard(
     }
     val status = when {
         transcribing || info.isTranscribing -> "Transcribing..."
-        info.hasTranscription -> "Transcribed"
+        info.isDone -> "Done"
+        info.hasTranscription -> "Ready to insert"
         else -> "Pending"
     }
 

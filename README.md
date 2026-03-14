@@ -119,14 +119,23 @@ None. Committing characters individually produces the same end result as a singl
 
 ## Release notes
 
+### vibevoice-v0.4.0
+
+Redesigned voice input UX around a state-driven overlay with a landing menu, persistent recordings, and full cancellability.
+
+- **Landing menu.** Tapping the mic icon opens a landing screen with two options — "New Recording" and "Recordings" — instead of immediately starting recording. Consistent entry point every time.
+- **Auto-insert.** Transcription results are automatically typed into the text field when complete. No extra tap required.
+- **Recordings are never lost.** Voice recordings are saved to user-accessible storage (`Android/data/<app>/files/vibevoice_recordings/`), browsable in any file manager. Recordings persist after insertion — marked as done but never silently deleted. Storage capped at 10 recordings.
+- **Recordings list in the overlay.** Browse, re-transcribe, re-insert, copy, or delete past recordings directly from the keyboard overlay. Re-transcribe reuses the same code path as a fresh transcription.
+- **Automatic retry.** Transcription retries up to 3 times with exponential backoff on network failure.
+- **Background transcription survives keyboard close.** If the keyboard hides during recording or transcription, work continues in the background. The overlay reattaches when the keyboard reopens.
+- **Instant cancellation.** Every state is cancellable. Cancelling during transcription immediately aborts the HTTP connection — no waiting for timeouts. The recording is always preserved on disk.
+- **Saved Recordings in Settings.** Settings > Voice Input > Saved Recordings provides a full management screen to transcribe, copy, or delete recordings.
+- **Increased timeouts.** HTTP read timeout raised from 60s to 10 minutes to support long recordings without premature disconnection.
+
 ### vibevoice-v0.3.0
 
-- **Recordings are never lost.** Voice recordings are now saved to persistent storage instead of being deleted on network failure or keyboard close. The filesystem is the source of truth — recordings persist until you explicitly insert, copy, or discard them.
-- **Automatic retry.** Transcription retries up to 3 times with exponential backoff on network failure.
-- **User-controlled text insertion.** Transcription results are shown for review with Insert / Copy / Discard buttons instead of being auto-committed. This prevents text from going to the wrong destination when the target window shifts (especially relevant for [RustDesk](https://github.com/rustdesk/rustdesk) remote sessions).
-- **Background transcription survives keyboard close.** If the keyboard hides during recording or transcription (app switch, phone call, etc.), work continues in the background. The overlay reattaches when the keyboard reopens. If transcription completes while the keyboard is hidden, a toast notifies you and the result is available on the next mic tap.
-- **Saved Recordings manager.** New screen in Settings > Voice Input > Saved Recordings to view, transcribe, copy, or delete old recordings. Storage capped at 10 recordings with automatic cleanup of the oldest.
-- **Increased timeouts.** HTTP read timeout raised from 60s to 10 minutes to support long recordings without premature disconnection.
+Internal release (superseded by v0.4.0).
 
 ### vibevoice-v0.2.0
 

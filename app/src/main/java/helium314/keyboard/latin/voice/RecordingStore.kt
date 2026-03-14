@@ -2,7 +2,6 @@
 package helium314.keyboard.latin.voice
 
 import android.content.Context
-import helium314.keyboard.latin.utils.DeviceProtectedUtils
 import helium314.keyboard.latin.utils.Log
 import java.io.File
 import java.text.SimpleDateFormat
@@ -14,8 +13,9 @@ import java.util.Locale
  *
  * The filesystem is the source of truth:
  *   - `recording_YYYYMMdd_HHmmss.wav`         → audio file
- *   - `recording_YYYYMMdd_HHmmss.txt`          → transcription result (present = done)
+ *   - `recording_YYYYMMdd_HHmmss.txt`          → transcription result
  *   - `recording_YYYYMMdd_HHmmss.transcribing` → marker (present = in-flight)
+ *   - `recording_YYYYMMdd_HHmmss.done`         → marker (present = user has inserted/copied)
  *
  * Thread safety: transcription writes use atomic rename (write .tmp, rename to .txt).
  */
@@ -29,8 +29,11 @@ class RecordingStore(context: Context) {
         private val TIMESTAMP_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     }
 
-    val recordingsDir: File = File(DeviceProtectedUtils.getFilesDir(context), DIR_NAME).also {
-        if (!it.exists()) it.mkdirs()
+    // Use external files dir so recordings are browsable in file managers at:
+    // /storage/emulated/0/Android/data/<app-id>/files/vibevoice_recordings/
+    // Falls back to internal storage if external is unavailable.
+    val recordingsDir: File = (context.getExternalFilesDir(null) ?: context.filesDir).let { base ->
+        File(base, DIR_NAME).also { if (!it.exists()) it.mkdirs() }
     }
 
     /** Create a new timestamped WAV file path. Enforces the storage cap first. */
@@ -82,11 +85,22 @@ class RecordingStore(context: Context) {
         return transcribingFileFor(wavFile).exists()
     }
 
-    /** Delete a recording and all associated files (WAV + TXT + .transcribing). */
+    /** Mark a recording as done (user has inserted or copied the transcription). */
+    fun markDone(wavFile: File) {
+        doneFileFor(wavFile).createNewFile()
+    }
+
+    /** Check if a recording has been handled (inserted/copied). */
+    fun isDone(wavFile: File): Boolean {
+        return doneFileFor(wavFile).exists()
+    }
+
+    /** Delete a recording and all associated files (WAV + TXT + markers). */
     fun delete(wavFile: File) {
         wavFile.delete()
         txtFileFor(wavFile).delete()
         transcribingFileFor(wavFile).delete()
+        doneFileFor(wavFile).delete()
         // Also clean up any leftover .tmp
         File(wavFile.parentFile, txtFileFor(wavFile).name + ".tmp").delete()
     }
@@ -119,9 +133,14 @@ class RecordingStore(context: Context) {
         return File(wavFile.parentFile, wavFile.nameWithoutExtension + ".transcribing")
     }
 
+    private fun doneFileFor(wavFile: File): File {
+        return File(wavFile.parentFile, wavFile.nameWithoutExtension + ".done")
+    }
+
     private fun buildRecordingInfo(wavFile: File): RecordingInfo {
         val txtFile = txtFileFor(wavFile)
         val transcribingFile = transcribingFileFor(wavFile)
+        val doneFile = doneFileFor(wavFile)
         val timestamp = parseTimestamp(wavFile.nameWithoutExtension)
         return RecordingInfo(
             wavFile = wavFile,
@@ -129,6 +148,7 @@ class RecordingStore(context: Context) {
             sizeBytes = wavFile.length(),
             hasTranscription = txtFile.exists(),
             isTranscribing = transcribingFile.exists(),
+            isDone = doneFile.exists(),
             transcriptionText = if (txtFile.exists()) txtFile.readText() else null
         )
     }
@@ -149,5 +169,6 @@ data class RecordingInfo(
     val sizeBytes: Long,
     val hasTranscription: Boolean,
     val isTranscribing: Boolean,
+    val isDone: Boolean,
     val transcriptionText: String?,
 )

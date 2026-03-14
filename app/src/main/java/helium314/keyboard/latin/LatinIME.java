@@ -1606,31 +1606,21 @@ public class LatinIME extends InputMethodService implements
             return;
         }
 
+        final View keyboardWrapper = mKeyboardSwitcher.getMainKeyboardView() != null
+                ? (View) mKeyboardSwitcher.getMainKeyboardView().getParent()
+                : null;
         switch (mVoiceInputController.getState()) {
             case IDLE:
-                // Check configuration before starting
-                if (!helium314.keyboard.latin.voice.VibeVoiceClient.isConfigured(this)) {
-                    android.widget.Toast.makeText(this, R.string.vibevoice_not_configured, android.widget.Toast.LENGTH_LONG).show();
-                    return;
-                }
-                // Start recording — overlay onto the keyboard wrapper (FrameLayout)
-                final View keyboardWrapper = mKeyboardSwitcher.getMainKeyboardView() != null
-                        ? (View) mKeyboardSwitcher.getMainKeyboardView().getParent()
-                        : null;
                 if (keyboardWrapper instanceof android.view.ViewGroup) {
                     mVoiceInputController.start((android.view.ViewGroup) keyboardWrapper);
                 }
                 break;
             case RECORDING:
-                // Stop recording and begin transcription
                 mVoiceInputController.stop();
                 break;
+            case LANDING:
+            case RECORDINGS_LIST:
             case TRANSCRIBING:
-                // Cancel transcription on voice key press
-                mVoiceInputController.cancel();
-                break;
-            case RESULT_READY:
-                // Dismiss result overlay on voice key press (files stay on disk)
                 mVoiceInputController.cancel();
                 break;
         }
