@@ -119,6 +119,11 @@ None. Committing characters individually produces the same end result as a singl
 
 ## Release notes
 
+### vibevoice-v0.4.1
+
+- **Fix: text insertion not working.** Transcription results were not being typed into the text field. The overlay was kept visible after auto-insert, which interfered with text commitment. Now the overlay closes immediately after inserting text, matching the working v0.3.0 behavior.
+- **Fix: transcription text not saved to disk.** `File.renameTo()` silently fails on Android external storage. Replaced with direct file write so `.txt` files are reliably created.
+
 ### vibevoice-v0.4.0
 
 Redesigned voice input UX around a state-driven overlay with a landing menu, persistent recordings, and full cancellability.

@@ -246,7 +246,7 @@ class VoiceInputController(
                             copyToClipboard(result.text)
                             Toast.makeText(context, "Copied to clipboard (editor disconnected)", Toast.LENGTH_LONG).show()
                         }
-                        transitionToLanding()
+                        cleanup()
                     } else {
                         Toast.makeText(context, "Transcription ready — tap mic to insert", Toast.LENGTH_LONG).show()
                         cleanup()
@@ -268,15 +268,15 @@ class VoiceInputController(
 
     internal fun onListInsert(info: RecordingInfo) {
         val text = info.transcriptionText ?: return
+        if (!info.isDone) store.markDone(info.wavFile)
         if (isEditorConnected()) {
             commitText(text)
-            if (!info.isDone) store.markDone(info.wavFile)
-            Toast.makeText(context, "Inserted", Toast.LENGTH_SHORT).show()
+            Log.i(TAG, "Inserted from recordings list (${text.length} chars)")
         } else {
             copyToClipboard(text)
             Toast.makeText(context, "Copied to clipboard (editor disconnected)", Toast.LENGTH_SHORT).show()
         }
-        overlayView?.refreshRecordingsList()
+        cleanup()
     }
 
     internal fun onListCopy(info: RecordingInfo) {

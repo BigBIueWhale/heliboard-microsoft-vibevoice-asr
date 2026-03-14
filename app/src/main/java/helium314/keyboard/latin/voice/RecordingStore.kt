@@ -57,16 +57,13 @@ class RecordingStore(context: Context) {
         return if (txtFile.exists()) txtFile.readText() else null
     }
 
-    /** Atomically save a transcription result. Writes to .tmp then renames. */
+    /** Save a transcription result to disk. */
     fun saveTranscription(wavFile: File, text: String) {
         val txtFile = txtFileFor(wavFile)
-        val tmpFile = File(txtFile.parentFile, txtFile.name + ".tmp")
         try {
-            tmpFile.writeText(text)
-            tmpFile.renameTo(txtFile)
+            txtFile.writeText(text)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save transcription for ${wavFile.name}", e)
-            tmpFile.delete()
         }
     }
 
