@@ -698,7 +698,8 @@ public class LatinIME extends InputMethodService implements
                     mKeyboardSwitcher.requestUpdatingShiftState(
                             getCurrentAutoCapsState(), getCurrentRecapitalizeState());
                     return kotlin.Unit.INSTANCE;
-                }
+                },
+                (kotlin.jvm.functions.Function0<Boolean>) () -> getCurrentInputConnection() != null
         );
     }
 
@@ -1135,6 +1136,15 @@ public class LatinIME extends InputMethodService implements
                 currentSettingsValues.mGestureTrailEnabled,
                 currentSettingsValues.mGestureFloatingPreviewTextEnabled);
 
+        // Re-attach voice input overlay if transcription is in progress in the background
+        if (mVoiceInputController != null) {
+            final View kbWrapper = mKeyboardSwitcher.getMainKeyboardView() != null
+                    ? (View) mKeyboardSwitcher.getMainKeyboardView().getParent() : null;
+            if (kbWrapper instanceof android.view.ViewGroup) {
+                mVoiceInputController.reattachIfNeeded((android.view.ViewGroup) kbWrapper);
+            }
+        }
+
         if (TRACE) Debug.startMethodTracing("/data/trace/latinime");
     }
 
@@ -1173,7 +1183,7 @@ public class LatinIME extends InputMethodService implements
         super.onFinishInputView(finishingInput);
         Log.i(TAG, "onFinishInputView");
         if (mVoiceInputController != null) {
-            mVoiceInputController.cancel();
+            mVoiceInputController.detachOverlay();
         }
         cleanupInternalStateForFinishInput();
     }
@@ -1617,6 +1627,10 @@ public class LatinIME extends InputMethodService implements
                 break;
             case TRANSCRIBING:
                 // Cancel transcription on voice key press
+                mVoiceInputController.cancel();
+                break;
+            case RESULT_READY:
+                // Dismiss result overlay on voice key press (files stay on disk)
                 mVoiceInputController.cancel();
                 break;
         }

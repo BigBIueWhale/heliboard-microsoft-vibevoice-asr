@@ -29,13 +29,13 @@ class AudioRecorder {
     private var outputFile: File? = null
     private var amplitudeCallback: ((Float) -> Unit)? = null
 
-    /** Start recording to a temporary WAV file. Returns the File that will contain the recording. */
-    fun start(cacheDir: File, onAmplitude: ((Float) -> Unit)? = null): File {
+    /** Start recording to the given WAV file. Returns the File handle. */
+    fun start(outputFile: File, onAmplitude: ((Float) -> Unit)? = null): File {
         if (isRecording.get()) throw IllegalStateException("Already recording")
 
         amplitudeCallback = onAmplitude
-        val file = File(cacheDir, "vibevoice_recording.wav")
-        outputFile = file
+        val file = outputFile
+        this.outputFile = file
 
         val bufferSize = maxOf(
             AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT),

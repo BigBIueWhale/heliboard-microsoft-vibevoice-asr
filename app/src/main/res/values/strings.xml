@@ -928,6 +928,8 @@ New dictionary:
     <string name="vibevoice_connection_failure">Connection failed — check URL and token</string>
     <string name="vibevoice_setup_link_title">Set Up VibeVoice Server</string>
     <string name="vibevoice_setup_link_description">Requires a machine with a GPU. See the vibe-voice-vendor project on GitHub.</string>
+    <string name="vibevoice_saved_recordings_title">Saved Recordings</string>
+    <string name="vibevoice_saved_recordings_description">Manage saved voice recordings and transcriptions</string>
     <string name="vibevoice_not_configured">Voice input not configured. Set server URL and token in Settings → Voice Input.</string>
     <string name="vibevoice_not_configured_short">Not configured</string>
     <string name="vibevoice_testing">Testing…</string>

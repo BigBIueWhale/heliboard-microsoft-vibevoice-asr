@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -20,6 +21,7 @@ import helium314.keyboard.latin.R
 import helium314.keyboard.latin.settings.Defaults
 import helium314.keyboard.latin.settings.Settings
 import helium314.keyboard.latin.utils.prefs
+import helium314.keyboard.latin.voice.RecordingStore
 import helium314.keyboard.latin.voice.VibeVoiceClient
 import helium314.keyboard.settings.SearchSettingsScreen
 import helium314.keyboard.settings.Setting
@@ -43,6 +45,7 @@ fun VoiceInputScreen(
         Settings.PREF_VIBEVOICE_SERVER_URL,
         Settings.PREF_VIBEVOICE_AUTH_TOKEN,
         SettingsWithoutKey.VIBEVOICE_TEST_CONNECTION,
+        SettingsWithoutKey.VIBEVOICE_SAVED_RECORDINGS,
         SettingsWithoutKey.VIBEVOICE_SETUP_LINK,
     )
     SearchSettingsScreen(
@@ -126,6 +129,27 @@ fun createVoiceInputSettings(context: Context) = listOf(
                         Toast.makeText(ctx, msgRes, Toast.LENGTH_SHORT).show()
                     }
                 }
+            }
+        )
+    },
+    Setting(context, SettingsWithoutKey.VIBEVOICE_SAVED_RECORDINGS,
+        R.string.vibevoice_saved_recordings_title, R.string.vibevoice_saved_recordings_description)
+    {
+        val ctx = LocalContext.current
+        val store = remember { RecordingStore(ctx) }
+        val recordings = remember { store.listRecordings() }
+        val count = recordings.size
+        val totalMb = String.format("%.1f", store.totalSizeBytes() / (1024.0 * 1024.0))
+        val description = if (count > 0) "$count recording${if (count != 1) "s" else ""} ($totalMb MB)"
+            else "No saved recordings"
+        Preference(
+            name = it.title,
+            description = description,
+            onClick = {
+                // Navigate via SettingsDestination
+                helium314.keyboard.settings.SettingsDestination.navigateTo(
+                    helium314.keyboard.settings.SettingsDestination.SavedRecordings
+                )
             }
         )
     },

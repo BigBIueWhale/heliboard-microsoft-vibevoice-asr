@@ -84,5 +84,6 @@ object SettingsWithoutKey {
     const val BACKGROUND_IMAGE_LANDSCAPE = "background_image_landscape"
     const val CUSTOM_FONT = "custom_font"
     const val VIBEVOICE_TEST_CONNECTION = "vibevoice_test_connection"
+    const val VIBEVOICE_SAVED_RECORDINGS = "vibevoice_saved_recordings"
     const val VIBEVOICE_SETUP_LINK = "vibevoice_setup_link"
 }

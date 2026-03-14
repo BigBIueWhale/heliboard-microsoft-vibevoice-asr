@@ -32,6 +32,7 @@ import helium314.keyboard.settings.screens.SecondaryLayoutScreen
 import helium314.keyboard.settings.screens.SubtypeScreen
 import helium314.keyboard.settings.screens.TextCorrectionScreen
 import helium314.keyboard.settings.screens.ToolbarScreen
+import helium314.keyboard.settings.screens.SavedRecordingsScreen
 import helium314.keyboard.settings.screens.VoiceInputScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -101,6 +102,9 @@ fun SettingsNavHost(
         composable(SettingsDestination.VoiceInput) {
             VoiceInputScreen(onClickBack = ::goBack)
         }
+        composable(SettingsDestination.SavedRecordings) {
+            SavedRecordingsScreen(onClickBack = ::goBack)
+        }
         composable(SettingsDestination.Debug) {
             DebugScreen(onClickBack = ::goBack)
         }
@@ -158,6 +162,7 @@ object SettingsDestination {
     const val Subtype = "subtype/"
     const val Layouts = "layouts"
     const val VoiceInput = "voice_input"
+    const val SavedRecordings = "saved_recordings"
     const val Dictionaries = "dictionaries"
     val navTarget = MutableStateFlow(Settings)
 

@@ -119,6 +119,15 @@ None. Committing characters individually produces the same end result as a singl
 
 ## Release notes
 
+### vibevoice-v0.3.0
+
+- **Recordings are never lost.** Voice recordings are now saved to persistent storage instead of being deleted on network failure or keyboard close. The filesystem is the source of truth — recordings persist until you explicitly insert, copy, or discard them.
+- **Automatic retry.** Transcription retries up to 3 times with exponential backoff on network failure.
+- **User-controlled text insertion.** Transcription results are shown for review with Insert / Copy / Discard buttons instead of being auto-committed. This prevents text from going to the wrong destination when the target window shifts (especially relevant for [RustDesk](https://github.com/rustdesk/rustdesk) remote sessions).
+- **Background transcription survives keyboard close.** If the keyboard hides during recording or transcription (app switch, phone call, etc.), work continues in the background. The overlay reattaches when the keyboard reopens. If transcription completes while the keyboard is hidden, a toast notifies you and the result is available on the next mic tap.
+- **Saved Recordings manager.** New screen in Settings > Voice Input > Saved Recordings to view, transcribe, copy, or delete old recordings. Storage capped at 10 recordings with automatic cleanup of the oldest.
+- **Increased timeouts.** HTTP read timeout raised from 60s to 10 minutes to support long recordings without premature disconnection.
+
 ### vibevoice-v0.2.0
 
 - Voice typing and clipboard paste now work in [RustDesk](https://github.com/rustdesk/rustdesk) remote sessions (see [RustDesk compatibility](#rustdesk-compatibility))

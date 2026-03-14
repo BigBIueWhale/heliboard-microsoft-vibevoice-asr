@@ -63,6 +63,10 @@ class VibeVoiceClient(
     private val transcribeUrl = "$serverUrl/v1/transcribe"
     private val healthUrl = "$serverUrl/health"
 
+    /** Active connection, if any. Volatile for cross-thread visibility. */
+    @Volatile
+    private var activeConnection: HttpsURLConnection? = null
+
     @Serializable
     data class Segment(
         val Start: Double = 0.0,
@@ -97,8 +101,9 @@ class VibeVoiceClient(
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$BOUNDARY")
                 setChunkedStreamingMode(0)
                 connectTimeout = 10_000
-                readTimeout = 60_000
+                readTimeout = 600_000
             }
+            activeConnection = connection
 
             writeMultipartBody(connection.outputStream, audioFile)
 
@@ -115,7 +120,20 @@ class VibeVoiceClient(
             Log.e(TAG, "Transcription failed", e)
             return null
         } finally {
+            activeConnection = null
             connection?.disconnect()
+        }
+    }
+
+    /**
+     * Abort the current transcription request, if any. Safe to call from any thread.
+     * The blocked [transcribe] call will throw an IOException and return null.
+     */
+    fun abort() {
+        try {
+            activeConnection?.disconnect()
+        } catch (_: Exception) {
+            // Ignore — we're force-closing
         }
     }
 
