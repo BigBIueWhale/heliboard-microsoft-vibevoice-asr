@@ -77,6 +77,7 @@ class VoiceInputController(
      * instead of starting a new recording. Pass [skipPendingCheck] = true to
      * bypass this and always start a fresh recording.
      */
+    @JvmOverloads
     fun start(container: ViewGroup, skipPendingCheck: Boolean = false) {
         if (state != State.IDLE) {
             Log.w(TAG, "Voice input already active (state=$state)")
