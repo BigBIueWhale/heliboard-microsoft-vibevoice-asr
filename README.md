@@ -119,48 +119,30 @@ All paths relative to `app/src/main/`:
 
 ### vibevoice-v0.5.2
 
-- **Fix: the Google Gemini Android application (and other WebView-based editors) dropped the last portion of voice-typed text when the user pressed Send.** Rewrote text insertion to use a single composition session: the text grows character by character via `setComposingText`, then one final `commitText` closes the composition with the full string. This matches how Android keyboards normally type (Gboard uses the same pattern for English). WebView/React apps defer state reconciliation until `compositionend`, so the full text is captured reliably. The previous approach (per-character `commitText`) fired 500 separate composition cycles, causing React's batched re-renders to overwrite the text field with a truncated value. RustDesk and TeamViewer remote desktop sessions continue to work because each `setComposingText` still triggers an individual change notification in the text field.
+- **Fix: voice-typed text was silently truncated in the Google Gemini Android application and other WebView-based editors.** Text insertion now uses a single Android composition session (`setComposingText` per character, then `commitText` with the full string) — the same pattern that Google's Gboard keyboard uses for normal English typing. Previous versions used per-character `commitText`, which is not how Android keyboards are supposed to insert text and caused WebView-based editors to lose data. Voice typing into RustDesk and TeamViewer remote desktop sessions continues to work.
 
 ### vibevoice-v0.5.1
 
-- **Fix: voice typing into RustDesk remote sessions stopped working in v0.5.0.** v0.5.0 incorrectly wrapped the character insertion loop in a batch edit, which collapsed all per-character change notifications into one. RustDesk needs to see each character arrive individually. Reverted to the original unbatched loop.
+- **Fix: voice typing into RustDesk remote sessions stopped working in v0.5.0.** Reverted an incorrect change from v0.5.0 that broke per-character text insertion. Superseded by the correct fix in v0.5.2.
 
 ### vibevoice-v0.5.0
 
-Reliability overhaul. You should be able to speak into this keyboard for as long as you want, in any Android application, and trust that your recording is safe — even if the network fails, the application is killed, or the phone's audio system misbehaves.
+Reliability overhaul for voice recording, storage, and text insertion.
 
-#### Recording reliability
-
-- **Fix: the Android smartphone's microphone could get permanently locked, producing 0-byte recordings until the phone was rebooted.** If anything went wrong during recording (storage full, SD card unmounted, audio hardware error), the microphone was never released. Every recording after that point would appear to start normally but capture no audio. The only recovery was restarting the phone. The microphone is now always released, regardless of what errors occur.
-
-- **Fix: a race condition between stopping a recording and starting the next one could lock the microphone or corrupt the new recording.** The recording thread now holds its own private reference to the microphone, so the main thread cannot interfere with it. Previously, quickly stopping and restarting a recording could cause the new recording to be silently destroyed.
-
-- **Fix: if the Android audio system started returning errors (for example, because another application seized the microphone), the keyboard would spin silently, draining the smartphone's battery and producing a 0-byte file.** The recording now aborts after 3 consecutive errors and tells the user "Recording too short" instead of spinning indefinitely with the "Listening..." UI showing.
-
-- **Fix: empty recordings (0-byte files with no audio) were sent to the VibeVoice server for transcription, retried 3 times, and sometimes kept on disk — all with no feedback to the user.** Recordings shorter than about 1 second are now discarded immediately with a "Recording too short" message.
-
-#### Storage
-
-- **Fix: force-stopping the keyboard application (or an Android out-of-memory kill) during transcription permanently corrupted the recordings list.** Recordings would get stuck in "Transcribing..." status forever and could never be automatically cleaned up, eventually filling all recording slots with undeletable entries. Stale transcription markers are now cleaned up every time the keyboard starts.
-
-- **Fix: the storage cap could get permanently stuck, unable to delete old recordings to make room for new ones.** The cap now always frees space, even in edge cases where previous cleanup attempts failed.
-
-- **Fix: when deleting a recording failed (for example, because the file was locked), the keyboard silently pretended it succeeded.** Failed deletions are now reported to the user with a toast message, and the storage cap only counts deletions that actually worked.
-
-- **Storage cap raised from 10 to 50 recordings.** A heavy voice-typing session could burn through 10 recordings in minutes. With 50 recordings and the scrollable recordings list fix (see below), all recordings are visible and manageable from the keyboard overlay.
-
-- **Recording filenames now use millisecond precision** to prevent filename collisions when stopping and starting recordings rapidly. Recordings from older versions are automatically cleaned up on upgrade.
-
-#### Text insertion
-
-- **Fix: the keyboard's user interface disappeared (white screen) when inserting text from the recordings list.** Some Android applications react to rapid text insertion by requesting a new input session, which tore down the keyboard mid-insertion. The keyboard overlay is now removed before text insertion begins so this teardown is harmless.
-
-#### Other
-
-- **Flat 500ms retry delay instead of exponential backoff.** When the self-hosted VibeVoice server is briefly unreachable, the worst-case retry time is now 1.5 seconds instead of 14 seconds.
-- **The recordings list no longer grows beyond the keyboard height.** Previously, with enough recordings, the list would expand the keyboard area to fill the entire smartphone screen. It now scrolls within the normal keyboard area.
-- **Cancellation is now guaranteed to take effect immediately.** Previously, pressing "Cancel" on the transcription overlay could be ignored due to a thread visibility issue, leaving the upload running in the background.
-- **All silent failures now show a message.** "No speech detected," "Recording too short," "Failed to delete recording," "Warning: transcription not saved to disk" — the keyboard no longer silently swallows errors.
+- **Fix: the Android smartphone's microphone could get permanently locked, producing 0-byte recordings until the phone was rebooted.** The microphone is now always released, regardless of what errors occur during recording.
+- **Fix: a race condition between stopping and starting recordings could lock the microphone or corrupt the new recording.** The recording thread now holds its own private reference to the microphone hardware.
+- **Fix: the keyboard would spin silently and drain the battery if the Android audio system returned errors.** The recording now aborts after 3 consecutive errors instead of spinning indefinitely.
+- **Fix: empty 0-byte recordings were sent to the server for transcription with no feedback to the user.** Recordings shorter than about 1 second are now discarded with a "Recording too short" message.
+- **Fix: force-stopping the keyboard during transcription permanently corrupted the recordings list.** Stale transcription markers are now cleaned up on startup.
+- **Fix: the storage cap could get permanently stuck.** The cap now always frees space, even in edge cases where previous cleanup attempts failed.
+- **Fix: failed recording deletions were silently ignored.** Failed deletions are now reported to the user, and the storage cap only counts deletions that actually succeeded.
+- **Fix: the keyboard disappeared (white screen) when inserting text from the recordings list.** The overlay is now removed before text insertion begins.
+- **Storage cap raised from 10 to 50 recordings.** All 50 are visible and manageable from the keyboard overlay.
+- **Recording filenames now use millisecond precision** to prevent filename collisions on rapid stop-start.
+- **Flat 500ms retry delay** instead of exponential backoff (14 seconds worst case → 1.5 seconds).
+- **The recordings list no longer grows beyond the keyboard height.** It now scrolls within the normal keyboard area.
+- **Pressing "Cancel" during transcription now takes effect immediately.**
+- **All silent failures now show a message.** "No speech detected," "Recording too short," "Failed to delete recording," "Warning: transcription not saved to disk."
 
 ### vibevoice-v0.4.1
 
