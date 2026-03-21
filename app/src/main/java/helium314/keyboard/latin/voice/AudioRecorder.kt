@@ -69,14 +69,13 @@ class AudioRecorder {
     /** Stop recording. The WAV file is finalized and ready for upload. */
     fun stop() {
         if (!isRecording.getAndSet(false)) return
-        recordingThread?.join(2000)
-        recordingThread = null
-        try {
-            audioRecord?.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping AudioRecord", e)
+        recordingThread?.join(5000)
+        if (recordingThread?.isAlive == true) {
+            Log.w(TAG, "Recording thread still alive after join timeout")
         }
-        audioRecord?.release()
+        recordingThread = null
+        // AudioRecord is stopped and released inside writeWavFile() after the
+        // recording loop exits, so there is no use-after-release race.
         audioRecord = null
         Log.i(TAG, "Recording stopped, file size: ${outputFile?.length() ?: 0} bytes")
     }
@@ -84,6 +83,10 @@ class AudioRecorder {
     val isActive get() = isRecording.get()
 
     private fun writeWavFile(file: File, bufferSize: Int) {
+        // Capture a local reference so the thread always operates on the
+        // AudioRecord it was given, even if stop() nulls the field.
+        val recorder = audioRecord
+            ?: throw IllegalStateException("audioRecord is null at recording thread start")
         val raf = RandomAccessFile(file, "rw")
         try {
             // Write placeholder header — will be patched when done
@@ -91,10 +94,12 @@ class AudioRecorder {
 
             val buffer = ShortArray(bufferSize / 2)
             var totalSamples = 0L
+            var consecutiveErrors = 0
 
             while (isRecording.get()) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+                val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) {
+                    consecutiveErrors = 0
                     // Write PCM data as little-endian 16-bit
                     val byteBuffer = ByteArray(read * 2)
                     for (i in 0 until read) {
@@ -114,6 +119,12 @@ class AudioRecorder {
                         val rms = Math.sqrt(sum / read) / Short.MAX_VALUE
                         cb(rms.toFloat().coerceIn(0f, 1f))
                     }
+                } else if (read < 0) {
+                    // AudioRecord error (ERROR = -3, ERROR_BAD_VALUE = -2, etc.)
+                    if (++consecutiveErrors >= 3) {
+                        Log.e(TAG, "AudioRecord.read() returned $read three times, aborting")
+                        break
+                    }
                 }
             }
 
@@ -122,6 +133,12 @@ class AudioRecorder {
             raf.seek(0)
             raf.write(buildWavHeader(dataSize))
         } finally {
+            // Always stop and release, even if an exception occurred above,
+            // so the microphone is never leaked.
+            try { recorder.stop() } catch (e: Exception) {
+                Log.w(TAG, "Error stopping AudioRecord", e)
+            }
+            recorder.release()
             raf.close()
         }
     }

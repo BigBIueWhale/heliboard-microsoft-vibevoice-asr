@@ -66,9 +66,14 @@ fun SavedRecordingsScreen(onClickBack: () -> Unit) {
                 actions = {
                     if (recordings.isNotEmpty()) {
                         TextButton(onClick = {
-                            for (r in recordings) store.delete(r.wavFile)
+                            var failed = 0
+                            for (r in recordings) {
+                                if (!store.delete(r.wavFile)) failed++
+                            }
                             revision++
-                            Toast.makeText(context, "All recordings deleted", Toast.LENGTH_SHORT).show()
+                            val msg = if (failed == 0) "All recordings deleted"
+                                else "Failed to delete $failed recording${if (failed != 1) "s" else ""}"
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                         }) {
                             Text("Delete All")
                         }
@@ -174,15 +179,18 @@ private fun RecordingCard(
                         CoroutineScope(Dispatchers.IO).launch {
                             val result = client.transcribe(info.wavFile)
                             store.clearTranscribing(info.wavFile)
+                            var saved = false
                             if (result != null && result.text.isNotBlank()) {
-                                store.saveTranscription(info.wavFile, result.text)
+                                saved = store.saveTranscription(info.wavFile, result.text)
                             }
                             withContext(Dispatchers.Main) {
                                 transcribing = false
                                 onChanged()
-                                val msg = if (result != null && result.text.isNotBlank())
-                                    "Transcription complete"
-                                else "Transcription failed"
+                                val msg = when {
+                                    result == null || result.text.isBlank() -> "Transcription failed"
+                                    !saved -> "Transcription complete but failed to save to disk"
+                                    else -> "Transcription complete"
+                                }
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -204,7 +212,9 @@ private fun RecordingCard(
                 }
                 // Delete button
                 TextButton(onClick = {
-                    store.delete(info.wavFile)
+                    if (!store.delete(info.wavFile)) {
+                        Toast.makeText(context, "Failed to delete recording", Toast.LENGTH_SHORT).show()
+                    }
                     onChanged()
                 }) {
                     Text("Delete")

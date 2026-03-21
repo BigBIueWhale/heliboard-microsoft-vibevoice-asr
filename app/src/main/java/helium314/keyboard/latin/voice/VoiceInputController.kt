@@ -55,7 +55,8 @@ class VoiceInputController(
         private const val TAG = "VoiceInputController"
         private const val TRANSCRIPTION_TIMEOUT_MS = 600_000L
         private const val MAX_RETRY_ATTEMPTS = 3
-        private const val RETRY_BASE_DELAY_MS = 2_000L
+        private const val RETRY_DELAY_MS = 500L
+        private const val MIN_RECORDING_SIZE_BYTES = 32_044L // ~1s at 16kHz 16-bit mono
     }
 
     private val recorder = AudioRecorder()
@@ -66,7 +67,7 @@ class VoiceInputController(
     private var overlayView: VoiceOverlayView? = null
     private var hostContainer: ViewGroup? = null
     private var recordingFile: File? = null
-    private var generation = 0
+    @Volatile private var generation = 0
     private var timeoutRunnable: Runnable? = null
     private var backgroundMode = false
     private var activeClient: VibeVoiceClient? = null
@@ -184,6 +185,13 @@ class VoiceInputController(
     private fun startTranscription() {
         val audioFile = recordingFile ?: run { transitionToLanding(); return }
 
+        if (audioFile.length() < MIN_RECORDING_SIZE_BYTES) {
+            store.delete(audioFile)
+            Toast.makeText(context, "Recording too short", Toast.LENGTH_SHORT).show()
+            if (!backgroundMode) transitionToLanding() else cleanup()
+            return
+        }
+
         store.markTranscribing(audioFile)
 
         val currentGen = generation
@@ -222,7 +230,7 @@ class VoiceInputController(
                         return@execute
                     }
                     Log.w(TAG, "Transcription attempt $attempt/$MAX_RETRY_ATTEMPTS failed, retrying...")
-                    Thread.sleep(RETRY_BASE_DELAY_MS * (1L shl (attempt - 1)))
+                    Thread.sleep(RETRY_DELAY_MS)
                 }
             }
 
@@ -235,25 +243,29 @@ class VoiceInputController(
                 activeClient = null
 
                 if (result != null && result.text.isNotBlank()) {
-                    store.saveTranscription(audioFile, result.text)
+                    if (!store.saveTranscription(audioFile, result.text)) {
+                        Toast.makeText(context, "Warning: transcription not saved to disk", Toast.LENGTH_LONG).show()
+                    }
                     store.markDone(audioFile)
 
                     if (!backgroundMode) {
+                        // Remove overlay before commitText — character-by-character
+                        // insertion can trigger onFinishInputView which tears down
+                        // views mid-loop if the overlay is still attached.
+                        cleanup()
                         if (isEditorConnected()) {
                             commitText(result.text)
-                            Log.i(TAG, "Transcription auto-inserted (${result.text.length} chars)")
                         } else {
                             copyToClipboard(result.text)
                             Toast.makeText(context, "Copied to clipboard (editor disconnected)", Toast.LENGTH_LONG).show()
                         }
-                        cleanup()
                     } else {
                         Toast.makeText(context, "Transcription ready — tap mic to insert", Toast.LENGTH_LONG).show()
                         cleanup()
                     }
                 } else if (result != null) {
-                    Log.i(TAG, "Transcription was empty/silence")
                     store.delete(audioFile)
+                    Toast.makeText(context, "No speech detected", Toast.LENGTH_SHORT).show()
                     if (!backgroundMode) transitionToLanding() else cleanup()
                 } else {
                     Toast.makeText(context, "Transcription failed — recording saved", Toast.LENGTH_LONG).show()
@@ -269,14 +281,17 @@ class VoiceInputController(
     internal fun onListInsert(info: RecordingInfo) {
         val text = info.transcriptionText ?: return
         if (!info.isDone) store.markDone(info.wavFile)
+        // Remove the overlay BEFORE inserting text. Character-by-character
+        // commitText can trigger onFinishInputView mid-loop; if the overlay
+        // is still up with state=RECORDINGS_LIST, detachOverlay calls cleanup()
+        // which tears down the keyboard view → white screen flash.
+        cleanup()
         if (isEditorConnected()) {
             commitText(text)
-            Log.i(TAG, "Inserted from recordings list (${text.length} chars)")
         } else {
             copyToClipboard(text)
             Toast.makeText(context, "Copied to clipboard (editor disconnected)", Toast.LENGTH_SHORT).show()
         }
-        cleanup()
     }
 
     internal fun onListCopy(info: RecordingInfo) {
@@ -295,7 +310,9 @@ class VoiceInputController(
     }
 
     internal fun onListDelete(info: RecordingInfo) {
-        store.delete(info.wavFile)
+        if (!store.delete(info.wavFile)) {
+            Toast.makeText(context, "Failed to delete recording", Toast.LENGTH_SHORT).show()
+        }
         overlayView?.refreshRecordingsList()
     }
 
@@ -357,6 +374,31 @@ class VoiceInputController(
                 layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
             }
             addView(contentFrame)
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val heightMode = MeasureSpec.getMode(heightMeasureSpec)
+            if (heightMode == MeasureSpec.UNSPECIFIED) {
+                // In IME's UNSPECIFIED mode, cap height to the tallest sibling
+                // (the keyboard view) so the recordings list scrolls within the
+                // keyboard area instead of growing the IME window.
+                val parent = parent as? ViewGroup
+                var maxSiblingHeight = 0
+                if (parent != null) {
+                    for (i in 0 until parent.childCount) {
+                        val sibling = parent.getChildAt(i)
+                        if (sibling !== this && sibling.measuredHeight > maxSiblingHeight) {
+                            maxSiblingHeight = sibling.measuredHeight
+                        }
+                    }
+                }
+                if (maxSiblingHeight > 0) {
+                    super.onMeasure(widthMeasureSpec,
+                        MeasureSpec.makeMeasureSpec(maxSiblingHeight, MeasureSpec.AT_MOST))
+                    return
+                }
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         }
 
         // ── Landing ─────────────────────────────────────────────

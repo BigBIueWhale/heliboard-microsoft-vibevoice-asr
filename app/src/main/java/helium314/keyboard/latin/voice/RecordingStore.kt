@@ -12,21 +12,21 @@ import java.util.Locale
  * File-based storage for voice recordings and their transcriptions.
  *
  * The filesystem is the source of truth:
- *   - `recording_YYYYMMdd_HHmmss.wav`         → audio file
- *   - `recording_YYYYMMdd_HHmmss.txt`          → transcription result
- *   - `recording_YYYYMMdd_HHmmss.transcribing` → marker (present = in-flight)
- *   - `recording_YYYYMMdd_HHmmss.done`         → marker (present = user has inserted/copied)
+ *   - `recording_YYYYMMdd_HHmmss_SSS.wav`         → audio file
+ *   - `recording_YYYYMMdd_HHmmss_SSS.txt`          → transcription result
+ *   - `recording_YYYYMMdd_HHmmss_SSS.transcribing` → marker (present = in-flight)
+ *   - `recording_YYYYMMdd_HHmmss_SSS.done`         → marker (present = user has inserted/copied)
  *
- * Thread safety: transcription writes use atomic rename (write .tmp, rename to .txt).
+ * Stale .transcribing markers from previous sessions are cleaned up on construction.
  */
 class RecordingStore(context: Context) {
 
     companion object {
         private const val TAG = "RecordingStore"
         private const val DIR_NAME = "vibevoice_recordings"
-        private const val MAX_RECORDINGS = 10
+        private const val MAX_RECORDINGS = 50
         private const val PREFIX = "recording_"
-        private val TIMESTAMP_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+        private val TIMESTAMP_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US)
     }
 
     // Use external files dir so recordings are browsable in file managers at:
@@ -34,6 +34,11 @@ class RecordingStore(context: Context) {
     // Falls back to internal storage if external is unavailable.
     val recordingsDir: File = (context.getExternalFilesDir(null) ?: context.filesDir).let { base ->
         File(base, DIR_NAME).also { if (!it.exists()) it.mkdirs() }
+    }
+
+    init {
+        clearStaleMarkers()
+        deleteLegacyRecordings()
     }
 
     /** Create a new timestamped WAV file path. Enforces the storage cap first. */
@@ -57,13 +62,14 @@ class RecordingStore(context: Context) {
         return if (txtFile.exists()) txtFile.readText() else null
     }
 
-    /** Save a transcription result to disk. */
-    fun saveTranscription(wavFile: File, text: String) {
+    /** Save a transcription result to disk. Returns true on success. */
+    fun saveTranscription(wavFile: File, text: String): Boolean {
         val txtFile = txtFileFor(wavFile)
-        try {
+        return try {
             txtFile.writeText(text)
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save transcription for ${wavFile.name}", e)
+            false
         }
     }
 
@@ -92,28 +98,56 @@ class RecordingStore(context: Context) {
         return doneFileFor(wavFile).exists()
     }
 
-    /** Delete a recording and all associated files (WAV + TXT + markers). */
-    fun delete(wavFile: File) {
+    /**
+     * Delete a recording and all associated files (WAV + TXT + markers).
+     * Returns true if the WAV file was successfully removed from disk.
+     */
+    fun delete(wavFile: File): Boolean {
         wavFile.delete()
         txtFileFor(wavFile).delete()
         transcribingFileFor(wavFile).delete()
         doneFileFor(wavFile).delete()
-        // Also clean up any leftover .tmp
         File(wavFile.parentFile, txtFileFor(wavFile).name + ".tmp").delete()
+        return !wavFile.exists()
     }
 
     /** Enforce the storage cap by deleting the oldest recordings beyond MAX_RECORDINGS. */
     fun enforceStorageCap() {
-        val recordings = listRecordings()
-        if (recordings.size >= MAX_RECORDINGS) {
-            // Delete oldest recordings to make room, but skip any that are currently transcribing
-            val toDelete = recordings
-                .filter { !it.isTranscribing }
-                .drop(MAX_RECORDINGS - 1) // keep MAX_RECORDINGS - 1 to make room for the new one
-            for (info in toDelete) {
-                Log.i(TAG, "Storage cap: deleting ${info.wavFile.name}")
-                delete(info.wavFile)
+        val wavFiles = recordingsDir.listFiles { f -> f.extension == "wav" } ?: return
+        if (wavFiles.size < MAX_RECORDINGS) return
+
+        // Sort oldest-first for deletion. Only check marker files, not transcription text.
+        val sorted = wavFiles
+            .map { wav ->
+                val ts = parseTimestamp(wav.nameWithoutExtension)
+                val transcribing = transcribingFileFor(wav).exists()
+                Triple(wav, ts, transcribing)
             }
+            .sortedBy { it.second } // oldest first
+
+        var remaining = sorted.size
+        // First pass: delete oldest non-transcribing recordings
+        for ((wav, _, transcribing) in sorted) {
+            if (remaining < MAX_RECORDINGS) break
+            if (!transcribing && delete(wav)) {
+                remaining--
+            }
+        }
+        // Second pass: if still over cap, force-delete oldest regardless
+        for ((wav, _, _) in sorted) {
+            if (remaining < MAX_RECORDINGS) break
+            if (wav.exists() && delete(wav)) {
+                remaining--
+            }
+        }
+    }
+
+    /** Clear .transcribing markers left over from a previous app session. */
+    private fun clearStaleMarkers() {
+        val markers = recordingsDir.listFiles { f -> f.extension == "transcribing" } ?: return
+        for (marker in markers) {
+            Log.i(TAG, "Clearing stale transcribing marker: ${marker.name}")
+            marker.delete()
         }
     }
 
@@ -148,6 +182,20 @@ class RecordingStore(context: Context) {
             isDone = doneFile.exists(),
             transcriptionText = if (txtFile.exists()) txtFile.readText() else null
         )
+    }
+
+    /** Delete recordings created with the old yyyyMMdd_HHmmss naming (no millis). */
+    private fun deleteLegacyRecordings() {
+        val allFiles = recordingsDir.listFiles() ?: return
+        // Legacy WAV names match "recording_XXXXXXXX_XXXXXX.wav" (8+6 digits).
+        // Current names have an extra "_SSS" suffix making them longer.
+        val legacyPattern = Regex("^recording_\\d{8}_\\d{6}\\.")
+        for (file in allFiles) {
+            if (legacyPattern.containsMatchIn(file.name)) {
+                Log.i(TAG, "Deleting legacy recording file: ${file.name}")
+                file.delete()
+            }
+        }
     }
 
     private fun parseTimestamp(name: String): Long {
