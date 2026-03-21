@@ -10,22 +10,28 @@ Voice typing on Android is terrible. It's nowhere near state-of-the-art, and typ
 
 This project replaces HeliBoard's voice input with [VibeVoice](https://huggingface.co/microsoft/VibeVoice), Microsoft's state-of-the-art ASR model. You speak, it transcribes — in any language, with real accuracy.
 
+The core promise: **you can speak into this keyboard for as long as you want and trust that your recording is safe on disk** — even if the network fails, the server is down, the application is killed, or the phone's audio system misbehaves. Every recording is saved as a WAV file before transcription begins. If transcription fails, the recording is kept so you can retry later. You never lose what you said.
+
 ![Voice recording overlay](doc/voice_recording_overlay.jpg)
 
 ## How it works
 
-The voice typing is powered by [vibe-voice-vendor](https://github.com/NatanFreeman/vibe-voice-vendor), a self-hosted VibeVoice server by [@NatanFreeman](https://github.com/NatanFreeman). The keyboard records audio on your phone, sends it to your server, and streams back the transcription.
+The voice typing is powered by [vibe-voice-vendor](https://github.com/NatanFreeman/vibe-voice-vendor), a self-hosted VibeVoice server by [@NatanFreeman](https://github.com/NatanFreeman). The keyboard records audio on your Android smartphone, sends it to your server, and streams back the transcription.
 
-1. Tap the mic icon in the keyboard toolbar
-2. Speak — audio is captured as 16 kHz mono WAV
+1. Tap the mic icon in the keyboard toolbar — a landing menu appears
+2. Tap **New Recording** and speak — audio is captured as a 16 kHz mono WAV file and saved to disk immediately
 3. Tap anywhere to stop recording
-4. The audio is uploaded to your VibeVoice server over HTTPS with Bearer token auth
-5. The server streams back the transcription via SSE
-6. The transcribed text is inserted into whatever text field you're typing in
+4. The audio is uploaded to your VibeVoice server over HTTPS with Bearer token authentication
+5. The server streams back the transcription via Server-Sent Events
+6. The transcribed text is automatically typed into whatever text field you're using
+
+If transcription fails, the keyboard retries up to 3 times. If all retries fail, the recording stays on disk — tap **Recordings** from the landing menu to browse, re-transcribe, copy, or delete past recordings. Up to 50 recordings are kept.
+
+If the keyboard is dismissed while recording or transcribing, the work continues in the background. When the keyboard reappears, the overlay reattaches.
 
 ## The catch
 
-You need to run your own [vibe-voice-vendor](https://github.com/NatanFreeman/vibe-voice-vendor) server on a machine with a decent GPU (tested on RTX 5090). The server runs the VibeVoice model via vLLM and exposes a simple HTTP API.
+You need to run your own [vibe-voice-vendor](https://github.com/NatanFreeman/vibe-voice-vendor) server on a machine with a decent GPU (tested on NVIDIA GeForce RTX 5090). The server runs the VibeVoice model via vLLM and exposes a simple HTTP API.
 
 Once your server is up, configure it in the app:
 
@@ -40,7 +46,7 @@ Enter your server URL and auth token in **Settings > Voice Input**, then tap **T
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.1.0" ./build.sh
+VIBEVOICE_VERSION="0.5.0" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -49,13 +55,23 @@ It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a d
 
 Download the latest APK from the [Releases](https://github.com/BigBIueWhale/heliboard-microsoft-vibevoice-asr/releases) page, or [build it from source](#building-from-source), then:
 
-1. Transfer the APK to your phone and install it (enable "Install from unknown sources" if prompted)
+1. Transfer the APK to your Android smartphone and install it (enable "Install from unknown sources" if prompted)
 2. Go to **Settings > System > Languages & input > On-screen keyboard** and enable **HeliBoard VibeVoice Debug**
-3. Open any text field, switch to HeliBoard VibeVoice via the keyboard icon in the nav bar
+3. Open any text field, switch to HeliBoard VibeVoice via the keyboard icon in the navigation bar
 4. Open **HeliBoard VibeVoice Settings > Voice Input** and enter your server URL and auth token
 5. Tap the mic icon in the toolbar — grant the microphone permission on first use
 
 > **Note:** The APK is a debug build (signed with a debug key, app ID `helium314.keyboard.vibevoice.debug`). Minification is enabled so the APK size stays small. There is no release signing keystore configured.
+
+## App compatibility
+
+### RustDesk remote desktop
+
+Voice typing and clipboard paste work when typing into a remote machine via [RustDesk](https://github.com/rustdesk/rustdesk) on Android. Text is inserted character by character so that RustDesk's Flutter-based text field (which detects input by diffing its value on each change callback) sees each character as a separate keystroke — the same as normal typing. This applies to both voice transcription and the keyboard's paste action.
+
+### Google Gemini and other WebView-based editors
+
+Voice-typed text is fully committed (not left in Android's composing/underline state) so that WebView-based applications like the Google Gemini Android application do not discard the last portion of text when the user presses Send.
 
 ## Fork details
 
@@ -71,13 +87,15 @@ All paths relative to `app/src/main/`:
 
 | File | Description |
 |---|---|
-| `java/.../voice/AudioRecorder.kt` | Records mic audio to WAV (16 kHz, mono, 16-bit PCM). Reports RMS amplitude for UI visualization. |
-| `java/.../voice/VibeVoiceClient.kt` | HTTP client for the VibeVoice server. Multipart upload, SSE streaming response, JWT auth. Handles self-signed TLS certificates. |
-| `java/.../voice/VoiceInputController.kt` | Orchestrates recording, transcription, and the overlay UI (mic icon, amplitude bars, status text). Theme-aware. |
-| `java/.../voice/VoicePermissionActivity.kt` | Transparent activity to request `RECORD_AUDIO` permission (required because `InputMethodService` can't show permission dialogs). |
+| `java/.../voice/AudioRecorder.kt` | Records microphone audio to a WAV file (16 kHz, mono, 16-bit PCM). Reports RMS amplitude for the UI visualization. Releases the microphone in a `finally` block so it is never leaked. |
+| `java/.../voice/VibeVoiceClient.kt` | HTTP client for the VibeVoice server. Multipart WAV upload, Server-Sent Events streaming response, JWT Bearer token authentication. Handles self-signed TLS certificates. |
+| `java/.../voice/VoiceInputController.kt` | Orchestrates the full voice input lifecycle: recording, transcription with retry, overlay UI (landing menu, amplitude bars, recordings list, status text). Theme-aware. |
+| `java/.../voice/RecordingStore.kt` | File-based storage for WAV recordings and their transcriptions. Filesystem is the source of truth — marker files track transcription state. Cleans up stale state on startup. |
+| `java/.../voice/VoicePermissionActivity.kt` | Transparent activity to request `RECORD_AUDIO` permission (required because `InputMethodService` cannot show permission dialogs directly). |
 | `java/.../settings/screens/VoiceInputScreen.kt` | Settings screen for server URL, auth token, test connection, and setup link. |
+| `java/.../settings/screens/SavedRecordingsScreen.kt` | Full management screen for saved recordings — transcribe, copy, delete individual or all recordings. |
 | `res/drawable/ic_settings_voice.xml` | Mic icon for the Voice Input settings entry. |
-| `res/xml/network_security_config.xml` | Android network security config (self-signed TLS handled programmatically). |
+| `res/xml/network_security_config.xml` | Android network security configuration (self-signed TLS handled programmatically). |
 
 ### Files modified
 
@@ -85,8 +103,8 @@ All paths relative to `app/src/main/`:
 
 | File | Changes |
 |---|---|
-| `AndroidManifest.xml` | Added `RECORD_AUDIO` and `INTERNET` permissions, network security config, `VoicePermissionActivity` registration. |
-| `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. Voice commit inserts text character by character for RustDesk compatibility (see [RustDesk compatibility](#rustdesk-compatibility)). |
+| `AndroidManifest.xml` | Added `RECORD_AUDIO` and `INTERNET` permissions, network security configuration, `VoicePermissionActivity` registration. |
+| `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. Voice text insertion uses character-by-character `commitText` inside a batch edit with explicit `finishComposingText` for broad application compatibility. |
 | `java/.../latin/inputlogic/InputLogic.java` | Clipboard paste (`onTextInput`) inserts text character by character for RustDesk compatibility. |
 | `java/.../latin/InputAttributes.java` | Removed conditions that hid the mic key when no system voice IME was installed. Voice key now shows on all non-password fields. |
 | `java/.../latin/settings/Settings.java` | Added `PREF_VIBEVOICE_SERVER_URL` and `PREF_VIBEVOICE_AUTH_TOKEN` preference keys. |
@@ -97,90 +115,65 @@ All paths relative to `app/src/main/`:
 
 ---
 
-## RustDesk compatibility
-
-Voice typing and clipboard paste now work when typing into a remote machine via [RustDesk](https://github.com/rustdesk/rustdesk) on Android.
-
-### The problem
-
-Android IMEs insert text via the `InputConnection` interface. Bulk text insertion — a single `commitText` or `setComposingText` call with the full string — fails silently in RustDesk's Flutter-based text field. The text never arrives on the remote machine. This affects both voice transcription and the keyboard's paste action.
-
-RustDesk detects keyboard input by diffing its hidden `TextFormField` value on each `onChanged` callback. Normal character-by-character typing works because each keystroke triggers a separate `onChanged` with a one-character difference. Bulk insertion fires at most one `onChanged` with a multi-character difference, which RustDesk does not reliably process.
-
-### The fix
-
-Both the voice input callback (`LatinIME.java`) and the text input / clipboard paste path (`InputLogic.onTextInput`) now commit text **one character at a time** in a loop, instead of inserting the full string in a single call. Each `commitText` triggers a separate `onChanged` in the target text field, so RustDesk's diff logic sees a one-character addition each time — exactly the same as normal typing.
-
-### Impact on other apps
-
-None. Committing characters individually produces the same end result as a single bulk `commitText`. The loop runs synchronously on the main thread, so there is no visible delay.
-
----
-
 ## Release notes
 
 ### vibevoice-v0.5.0
 
-Reliability and correctness overhaul. This release rewrites the core recording, storage, and text insertion paths to eliminate race conditions, resource leaks, and silent data loss that could leave the keyboard in a broken state requiring a phone reboot to recover. The goal: you should be able to speak into this keyboard for as long as you want, in any Android application, and trust that your recording is safe on disk even if the network fails, the app is killed, or the phone's audio subsystem misbehaves.
+Reliability overhaul. You should be able to speak into this keyboard for as long as you want, in any Android application, and trust that your recording is safe — even if the network fails, the application is killed, or the phone's audio system misbehaves.
 
 #### Recording reliability
 
-- **Fix: Android microphone leaked after disk I/O error, requiring phone reboot to recover.** The `AudioRecord` native resource (which holds exclusive access to the smartphone's microphone hardware) is now stopped and released inside a `finally` block on the recording thread. Previously, if the WAV file write failed mid-recording (for example: the smartphone's internal storage is full, or the SD card is unmounted), the `AudioRecord.stop()` and `AudioRecord.release()` calls were skipped entirely because they sat after the write loop, not in a `finally` block. The microphone hardware remained locked by the killed recording session. Every subsequent recording attempt would initialize a new `AudioRecord` that appeared healthy (passing Android's `STATE_INITIALIZED` check), but `AudioRecord.read()` would return zero data because the hardware was still held by the leaked instance. This produced 0-byte WAV files (just a 44-byte header with no audio data). The only recovery was rebooting the Android smartphone to force the operating system to release the microphone hardware. This was the root cause of the "every recording is 0.0 MB until I restart my phone" failure reported in production.
+- **Fix: the Android smartphone's microphone could get permanently locked, producing 0-byte recordings until the phone was rebooted.** If anything went wrong during recording (storage full, SD card unmounted, audio hardware error), the microphone was never released. Every recording after that point would appear to start normally but capture no audio. The only recovery was restarting the phone. The microphone is now always released, regardless of what errors occur.
 
-- **Fix: race condition between the recording thread and the main thread could corrupt or leak the `AudioRecord`.** The recording thread now captures the `AudioRecord` instance as a thread-local variable at startup and uses that local reference for the entire recording lifecycle — including the `read()` loop, the `stop()` call, and the `release()` call. Previously, the recording thread read the `audioRecord` field directly from the `AudioRecorder` class, while the main thread's `stop()` method could null that same field after a 5-second join timeout. If the join timed out (for example, because the recording thread was blocked in a slow `AudioRecord.read()` call), two things could go wrong: (1) the thread would read `null` via the safe-call operator, skip `stop()`/`release()`, and leak the microphone; or (2) if `start()` was called immediately after, the thread would call `stop()`/`release()` on the *new* `AudioRecord` instance instead of the one it was recording with, destroying an active recording session.
+- **Fix: a race condition between stopping a recording and starting the next one could lock the microphone or corrupt the new recording.** The recording thread now holds its own private reference to the microphone, so the main thread cannot interfere with it. Previously, quickly stopping and restarting a recording could cause the new recording to be silently destroyed.
 
-- **Fix: infinite CPU spin when the Android audio subsystem returns errors.** If `AudioRecord.read()` returns a negative error code (such as `ERROR = -3` or `ERROR_BAD_VALUE = -2`, which can happen when another Android application seizes exclusive microphone access, or when the audio hardware abstraction layer enters a bad state), the recording loop now aborts after 3 consecutive errors instead of spinning indefinitely. Previously, the `if (read > 0)` check would skip writing data, but the `while (isRecording.get())` loop would immediately call `read()` again. Since error returns are instantaneous (no blocking), this was a tight CPU spin that would run at 100% of one core, drain the smartphone's battery, and produce a 0-byte recording — all while the user saw the "Listening..." UI with no indication that anything was wrong. The recording now ends cleanly, and the minimum-size check (see below) discards the empty file and shows a "Recording too short" message.
+- **Fix: if the Android audio system started returning errors (for example, because another application seized the microphone), the keyboard would spin silently, draining the smartphone's battery and producing a 0-byte file.** The recording now aborts after 3 consecutive errors and tells the user "Recording too short" instead of spinning indefinitely with the "Listening..." UI showing.
 
-- **Fix: impossible internal state now crashes instead of silently producing empty files.** If the `AudioRecord` instance is somehow `null` when the recording thread starts (which should be impossible given the happens-before guarantee of `Thread.start()`), the thread now throws an `IllegalStateException` with a stack trace instead of silently returning. Previously, the `?: return` fallback would exit the thread without writing any audio data, producing a 0-byte WAV file that the user would discover only after the transcription attempt failed.
+- **Fix: empty recordings (0-byte files with no audio) were sent to the VibeVoice server for transcription, retried 3 times, and sometimes kept on disk — all with no feedback to the user.** Recordings shorter than about 1 second are now discarded immediately with a "Recording too short" message.
 
-#### Storage and file management
+#### Storage
 
-- **Fix: application kill during transcription permanently corrupted the recordings list.** When the Android operating system kills the keyboard process while a transcription is in flight (which can happen during low-memory conditions, or when the user force-stops the application from Android Settings), the `.transcribing` marker file was left on disk with no code to clean it up. On next launch, the recording appeared permanently stuck in "Transcribing..." status in the recordings list. Worse, `enforceStorageCap()` explicitly skipped recordings with `.transcribing` markers to avoid deleting files being actively uploaded, so these zombie recordings could never be automatically deleted. After enough app kills, all recording slots could be occupied by undeletable zombie entries. The `RecordingStore` now clears all `.transcribing` markers on construction, before any transcription can be in flight.
+- **Fix: force-stopping the keyboard application (or an Android out-of-memory kill) during transcription permanently corrupted the recordings list.** Recordings would get stuck in "Transcribing..." status forever and could never be automatically cleaned up, eventually filling all recording slots with undeletable entries. Stale transcription markers are now cleaned up every time the keyboard starts.
 
-- **Fix: storage cap enforcement could get permanently stuck.** The `enforceStorageCap()` method now deletes recordings in a loop until the count is under the cap, and includes a second pass that force-deletes the oldest recordings regardless of `.transcribing` status if the first pass couldn't free enough space. Previously, the method used a single `.filter { !it.isTranscribing }.drop(MAX - 1)` pattern that deleted nothing when all recordings had `.transcribing` markers, and the fallback only deleted a single recording per invocation.
+- **Fix: the storage cap could get permanently stuck, unable to delete old recordings to make room for new ones.** The cap now always frees space, even in edge cases where previous cleanup attempts failed.
 
-- **Fix: storage cap enforcement read all transcription text files on the Android main thread before every recording.** The `enforceStorageCap()` method previously called `listRecordings()`, which reads the full text content of every `.txt` transcription file into memory to populate the `RecordingInfo.transcriptionText` field. With 50 recordings, that is 50 filesystem reads on the Android main thread (the UI thread) executed synchronously before every new recording begins. The cap enforcement now directly lists `.wav` files and checks only `.transcribing` marker existence, without reading any transcription text.
+- **Fix: when deleting a recording failed (for example, because the file was locked), the keyboard silently pretended it succeeded.** Failed deletions are now reported to the user with a toast message, and the storage cap only counts deletions that actually worked.
 
-- **Fix: `File.delete()` failures were silently ignored, causing the storage cap to believe it freed space when it didn't.** The `delete()` method now returns a `Boolean` indicating whether the WAV file was actually removed from disk, and `enforceStorageCap()` only counts a deletion as successful when the file is confirmed gone. Previously, if `File.delete()` failed (for example, because the file was locked by an in-flight HTTP upload), the cap logic decremented its counter anyway and proceeded as if the space was freed.
+- **Storage cap raised from 10 to 50 recordings.** A heavy voice-typing session could burn through 10 recordings in minutes. With 50 recordings and the scrollable recordings list fix (see below), all recordings are visible and manageable from the keyboard overlay.
 
-- **Fix: empty or too-short recordings were uploaded to the VibeVoice server with 3 retry attempts.** Recordings shorter than approximately 1 second of audio (under 32,044 bytes at 16 kHz 16-bit mono PCM) are now discarded immediately with a "Recording too short" toast message. Previously, a 44-byte WAV file (just the RIFF header, zero audio data) would be sent to the server, fail transcription, retry twice more with delays, and then either be kept on disk as a failed recording or deleted if the server returned an empty result — all with no feedback to the user about what happened.
-
-- **Fix: recording filename collisions on rapid stop-and-start.** Recording filenames now use millisecond-precision timestamps (`recording_YYYYMMdd_HHmmss_SSS.wav`) instead of second-precision (`recording_YYYYMMdd_HHmmss.wav`). Previously, two recordings created within the same calendar second would receive the same filename. Because `RandomAccessFile(file, "rw")` opens existing files without truncating them, the second recording would overwrite the beginning of the first file's audio data while leaving the old file's trailing bytes intact, producing a corrupted WAV file. Recordings created by older versions of the application (using the old second-precision naming) are automatically deleted on upgrade.
-
-- **Storage cap raised from 10 to 50 recordings.** The previous cap of 10 meant that a heavy voice-typing session could burn through the entire backup window in minutes. With 50 recordings and the scrollable recordings list fix (see below), all recordings are visible and manageable from the keyboard overlay.
-
-- **User-facing operations now report failures instead of silently succeeding.** When the user presses "Delete" on a recording (in either the keyboard overlay or the Android Settings screen) and the file cannot be removed from disk, a toast message now says "Failed to delete recording." The "Delete All" button in Android Settings reports how many deletions failed. When a transcription result cannot be saved to the `.txt` file on disk, a toast says "Warning: transcription not saved to disk." When the VibeVoice server returns an empty transcription (no speech detected), a toast says "No speech detected." Previously, all of these cases were handled silently — the UI would update as if the operation succeeded, or simply return to the landing screen with no explanation.
+- **Recording filenames now use millisecond precision** to prevent filename collisions when stopping and starting recordings rapidly. Recordings from older versions are automatically cleaned up on upgrade.
 
 #### Text insertion
 
-- **Fix: the Google Gemini Android application (and other WebView-based text editors) silently dropped the last portion of voice-typed text.** The character-by-character `commitText` insertion loop in `LatinIME.java` is now wrapped in a single `beginBatchEdit()`/`endBatchEdit()` pair, and `finishComposingText()` is called after the loop completes. Previously, the batch edit wrapped only the initial `finishComposingText()` call (which clears pre-existing composing text), and the character loop ran outside any batch edit. After the loop, `restartSuggestionsOnWordTouchedByCursor()` was called, which scans the text around the cursor and marks the last word as composing text (the underlined "in-progress" state that Android's `InputConnection` uses for inline suggestions). WebView-based editors like the Google Gemini Android application treat composing text as provisional — when the user taps "Send," the editor commits only finalized text and discards anything still in composing state. The result: the last word, sentence fragment, or even multiple sentences of voice-typed text would disappear when the message was sent. Manually typing or deleting a single character after voice input would trigger the keyboard's normal composing-text finalization, which is why the workaround of "type one character after voice typing" made the problem go away.
+- **Fix: the Google Gemini Android application (and other WebView-based editors) silently dropped the last portion of voice-typed text when the user pressed Send.** The keyboard was leaving the last word in Android's "composing" state (the underlined in-progress text), which WebView-based editors discard on submit. Voice-typed text is now fully committed. This also explains why typing a single character after voice input "fixed" the problem — it triggered the keyboard to finalize the composing text.
 
-- **Fix: the keyboard's entire user interface disappeared (white screen) when inserting text from the recordings list.** The voice input overlay is now removed from the Android view hierarchy *before* the character-by-character text insertion begins, for both the "Insert" action from the recordings list and the automatic insertion after a fresh transcription completes. Previously, the overlay remained attached during the `commitText` loop. Because each `commitText` call sends a change notification to the target application's text editor, some applications respond by requesting a new input session, which triggers Android's `InputMethodService.onFinishInputView()` callback. With the overlay still attached in the `RECORDINGS_LIST` or `TRANSCRIBING` state, `detachOverlay()` would call `cleanup()`, which removed the overlay and tore down the keyboard view mid-insertion. The Android system then briefly showed a blank (white) keyboard area before recreating the input view. The text insertion itself still completed (because `commitText` calls are buffered by Android's `InputConnection` even after the view is destroyed), but the visual disruption was jarring.
+- **Fix: the keyboard's user interface disappeared (white screen) when inserting text from the recordings list.** Some Android applications react to rapid text insertion by requesting a new input session, which tore down the keyboard mid-insertion. The keyboard overlay is now removed before text insertion begins so this teardown is harmless.
 
-#### Other changes
+#### Other
 
-- **Flat 500ms retry delay instead of exponential backoff.** Transcription retry delay changed from exponential backoff (2 seconds, then 4 seconds, then 8 seconds — 14 seconds total worst case) to a flat 500ms pause between each of the 3 retry attempts (1.5 seconds total worst case). This is a self-hosted VibeVoice server on a private network, not a shared public API — there is no server-side rate limiting to respect, and no other users to be polite to. When the server is temporarily unreachable, the user wants to know as fast as possible whether the transcription will work.
-
-- **Cancellation signal between threads is now `@Volatile`.** The `generation` counter that the transcription background thread checks to detect cancellation from the Android main thread is now marked `@Volatile` in the Java Memory Model sense. Previously, the background thread could read a stale cached value of the counter and miss a cancellation signal, continuing to upload audio to the VibeVoice server and wait for a response even after the user had pressed "Cancel" on the keyboard overlay.
+- **Flat 500ms retry delay instead of exponential backoff.** When the self-hosted VibeVoice server is briefly unreachable, the worst-case retry time is now 1.5 seconds instead of 14 seconds.
+- **The recordings list no longer grows beyond the keyboard height.** Previously, with enough recordings, the list would expand the keyboard area to fill the entire smartphone screen. It now scrolls within the normal keyboard area.
+- **Cancellation is now guaranteed to take effect immediately.** Previously, pressing "Cancel" on the transcription overlay could be ignored due to a thread visibility issue, leaving the upload running in the background.
+- **All silent failures now show a message.** "No speech detected," "Recording too short," "Failed to delete recording," "Warning: transcription not saved to disk" — the keyboard no longer silently swallows errors.
 
 ### vibevoice-v0.4.1
 
-- **Fix: text insertion not working.** Transcription results were not being typed into the text field. The overlay was kept visible after auto-insert, which interfered with text commitment. Now the overlay closes immediately after inserting text, matching the working v0.3.0 behavior.
-- **Fix: transcription text not saved to disk.** `File.renameTo()` silently fails on Android external storage. Replaced with direct file write so `.txt` files are reliably created.
+- **Fix: text insertion not working.** Transcription results were not being typed into the text field. The overlay was kept visible after auto-insert, which interfered with text commitment.
+- **Fix: transcription text not saved to disk.** The file save method silently failed on Android external storage. Replaced with a method that works reliably.
 
 ### vibevoice-v0.4.0
 
 Redesigned voice input UX around a state-driven overlay with a landing menu, persistent recordings, and full cancellability.
 
-- **Landing menu.** Tapping the mic icon opens a landing screen with two options — "New Recording" and "Recordings" — instead of immediately starting recording. Consistent entry point every time.
+- **Landing menu.** Tapping the mic icon opens a landing screen with "New Recording" and "Recordings" options instead of immediately starting recording.
 - **Auto-insert.** Transcription results are automatically typed into the text field when complete. No extra tap required.
-- **Recordings are never lost.** Voice recordings are saved to user-accessible storage (`Android/data/<app>/files/vibevoice_recordings/`), browsable in any file manager. Recordings persist after insertion — marked as done but never silently deleted. Storage capped at 10 recordings.
-- **Recordings list in the overlay.** Browse, re-transcribe, re-insert, copy, or delete past recordings directly from the keyboard overlay. Re-transcribe reuses the same code path as a fresh transcription.
-- **Automatic retry.** Transcription retries up to 3 times with exponential backoff on network failure.
+- **Recordings are never lost.** Voice recordings are saved to user-accessible storage (`Android/data/<app>/files/vibevoice_recordings/`), browsable in any file manager.
+- **Recordings list in the overlay.** Browse, re-transcribe, re-insert, copy, or delete past recordings directly from the keyboard overlay.
+- **Automatic retry.** Transcription retries up to 3 times on network failure.
 - **Background transcription survives keyboard close.** If the keyboard hides during recording or transcription, work continues in the background. The overlay reattaches when the keyboard reopens.
-- **Instant cancellation.** Every state is cancellable. Cancelling during transcription immediately aborts the HTTP connection — no waiting for timeouts. The recording is always preserved on disk.
-- **Saved Recordings in Settings.** Settings > Voice Input > Saved Recordings provides a full management screen to transcribe, copy, or delete recordings.
-- **Increased timeouts.** HTTP read timeout raised from 60s to 10 minutes to support long recordings without premature disconnection.
+- **Instant cancellation.** Every state is cancellable. Cancelling during transcription immediately aborts the HTTP connection. The recording is always preserved on disk.
+- **Saved Recordings in Settings.** Settings > Voice Input > Saved Recordings provides a full management screen.
+- **Increased timeouts.** HTTP read timeout raised to 10 minutes to support long recordings.
 
 ### vibevoice-v0.3.0
 
@@ -188,15 +181,15 @@ Internal release (superseded by v0.4.0).
 
 ### vibevoice-v0.2.0
 
-- Voice typing and clipboard paste now work in [RustDesk](https://github.com/rustdesk/rustdesk) remote sessions (see [RustDesk compatibility](#rustdesk-compatibility))
+- Voice typing and clipboard paste now work in [RustDesk](https://github.com/rustdesk/rustdesk) remote sessions on Android smartphones.
 
 ### vibevoice-v0.1.0
 
 Initial release. Fork of [HeliBoard v3.5](https://github.com/Helium314/HeliBoard/releases/tag/v3.5) with the stock voice input completely replaced by a custom VibeVoice ASR client.
 
 - Voice typing via a self-hosted [vibe-voice-vendor](https://github.com/NatanFreeman/vibe-voice-vendor) server (Microsoft VibeVoice model)
-- Records 16 kHz mono WAV audio on-device, uploads via HTTPS with Bearer token auth
-- Server streams back transcription via SSE
+- Records 16 kHz mono WAV audio on-device, uploads via HTTPS with Bearer token authentication
+- Server streams back transcription via Server-Sent Events
 - Recording overlay with live amplitude visualization, themed to match keyboard colors
 - Settings screen for server URL, auth token (masked), and connection test
 - Supports self-signed TLS certificates
