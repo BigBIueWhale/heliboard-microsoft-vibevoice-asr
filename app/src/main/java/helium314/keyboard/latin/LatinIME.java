@@ -675,22 +675,30 @@ public class LatinIME extends InputMethodService implements
         mVoiceInputController = new helium314.keyboard.latin.voice.VoiceInputController(
                 this,
                 (kotlin.jvm.functions.Function1<String, kotlin.Unit>) text -> {
+                    // Clear any pre-existing composing text.
                     mInputLogic.mConnection.beginBatchEdit();
                     mInputLogic.mConnection.finishComposingText();
-                    // Insert text character by character so apps that detect
-                    // input by diffing (e.g. RustDesk) see each character.
+                    mInputLogic.mConnection.endBatchEdit();
+                    // Insert text character by character OUTSIDE any batch edit.
+                    // Each commitText must trigger a separate change notification
+                    // so that apps which detect input by diffing (e.g. RustDesk's
+                    // Flutter TextFormField) see each character individually.
+                    // Batch edit would collapse all notifications into one,
+                    // making the insertion look like a single bulk paste.
                     for (int i = 0; i < text.length(); ) {
                         final int codePoint = text.codePointAt(i);
                         mInputLogic.mConnection.commitText(
                                 new String(Character.toChars(codePoint)), 1);
                         i += Character.charCount(codePoint);
                     }
-                    // Finalize — nothing should be left in composing state.
-                    // Do NOT call restartSuggestionsOnWordTouchedByCursor here:
-                    // it marks the last word as composing, which causes web-based
-                    // editors (e.g. Gemini) to drop it when the user presses Send.
+                    // Ensure nothing is left in composing state. commitText already
+                    // clears composing state per the InputConnection contract, but
+                    // this is an explicit safety measure.
+                    // Do NOT call restartSuggestionsOnWordTouchedByCursor here — it
+                    // calls setComposingRegion() which turns the last word back into
+                    // composing text. WebView-based editors (e.g. Google Gemini)
+                    // treat composing text as provisional and discard it on submit.
                     mInputLogic.mConnection.finishComposingText();
-                    mInputLogic.mConnection.endBatchEdit();
                     mKeyboardSwitcher.requestUpdatingShiftState(
                             getCurrentAutoCapsState(), getCurrentRecapitalizeState());
                     return kotlin.Unit.INSTANCE;

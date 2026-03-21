@@ -145,8 +145,6 @@ Reliability overhaul. You should be able to speak into this keyboard for as long
 
 #### Text insertion
 
-- **Fix: the Google Gemini Android application (and other WebView-based editors) silently dropped the last portion of voice-typed text when the user pressed Send.** The keyboard was leaving the last word in Android's "composing" state (the underlined in-progress text), which WebView-based editors discard on submit. Voice-typed text is now fully committed. This also explains why typing a single character after voice input "fixed" the problem — it triggered the keyboard to finalize the composing text.
-
 - **Fix: the keyboard's user interface disappeared (white screen) when inserting text from the recordings list.** Some Android applications react to rapid text insertion by requesting a new input session, which tore down the keyboard mid-insertion. The keyboard overlay is now removed before text insertion begins so this teardown is harmless.
 
 #### Other
@@ -155,6 +153,12 @@ Reliability overhaul. You should be able to speak into this keyboard for as long
 - **The recordings list no longer grows beyond the keyboard height.** Previously, with enough recordings, the list would expand the keyboard area to fill the entire smartphone screen. It now scrolls within the normal keyboard area.
 - **Cancellation is now guaranteed to take effect immediately.** Previously, pressing "Cancel" on the transcription overlay could be ignored due to a thread visibility issue, leaving the upload running in the background.
 - **All silent failures now show a message.** "No speech detected," "Recording too short," "Failed to delete recording," "Warning: transcription not saved to disk" — the keyboard no longer silently swallows errors.
+
+### vibevoice-v0.5.1
+
+- **Fix: voice typing into RustDesk remote sessions stopped working in v0.5.0.** v0.5.0 incorrectly wrapped the character insertion loop in a batch edit, which collapsed all per-character change notifications into one. RustDesk needs to see each character arrive individually. Reverted to the original unbatched loop.
+
+- **Fix: the Google Gemini Android application (and other WebView-based editors) dropped the last portion of voice-typed text on Send.** After inserting voice text, the keyboard marked the last word as "composing" (Android's underlined in-progress state) to offer autocorrect suggestions. WebView-based editors discard composing text on submit. Voice-typed text is now fully committed. This is why typing one character after voice input used to "fix" it — the manual keystroke finalized the composing text.
 
 ### vibevoice-v0.4.1
 
