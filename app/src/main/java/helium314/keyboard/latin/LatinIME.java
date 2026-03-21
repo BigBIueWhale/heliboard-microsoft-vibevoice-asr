@@ -679,26 +679,33 @@ public class LatinIME extends InputMethodService implements
                     mInputLogic.mConnection.beginBatchEdit();
                     mInputLogic.mConnection.finishComposingText();
                     mInputLogic.mConnection.endBatchEdit();
-                    // Insert text character by character OUTSIDE any batch edit.
-                    // Each commitText must trigger a separate change notification
-                    // so that apps which detect input by diffing (e.g. RustDesk's
-                    // Flutter TextFormField) see each character individually.
-                    // Batch edit would collapse all notifications into one,
-                    // making the insertion look like a single bulk paste.
+                    // Insert text as a single composition session: grow the
+                    // composing region one character at a time, then commit the
+                    // full string at the end.
+                    //
+                    // Why setComposingText instead of commitText per character:
+                    // - RustDesk compatibility: each setComposingText changes the
+                    //   visible text by one character, triggering a separate
+                    //   onChanged in Flutter's TextFormField diff logic.
+                    // - WebView/React compatibility (Google Gemini): a single
+                    //   composition session (one compositionstart, many
+                    //   compositionupdates, one compositionend) is the normal
+                    //   Android typing pattern. React defers controlled input
+                    //   state reconciliation until compositionend, so the final
+                    //   commitText delivers the complete text reliably.
+                    //   Per-character commitText fired 500 separate composition
+                    //   cycles, causing React's batched re-renders to overwrite
+                    //   the DOM with truncated state.
+                    final StringBuilder composing = new StringBuilder();
                     for (int i = 0; i < text.length(); ) {
                         final int codePoint = text.codePointAt(i);
-                        mInputLogic.mConnection.commitText(
-                                new String(Character.toChars(codePoint)), 1);
+                        composing.appendCodePoint(codePoint);
+                        mInputLogic.mConnection.setComposingText(composing, 1);
                         i += Character.charCount(codePoint);
                     }
-                    // Ensure nothing is left in composing state. commitText already
-                    // clears composing state per the InputConnection contract, but
-                    // this is an explicit safety measure.
-                    // Do NOT call restartSuggestionsOnWordTouchedByCursor here — it
-                    // calls setComposingRegion() which turns the last word back into
-                    // composing text. WebView-based editors (e.g. Google Gemini)
-                    // treat composing text as provisional and discard it on submit.
-                    mInputLogic.mConnection.finishComposingText();
+                    // Commit the full string — closes the composition session,
+                    // fires compositionend, and finalizes all text.
+                    mInputLogic.mConnection.commitText(text, 1);
                     mKeyboardSwitcher.requestUpdatingShiftState(
                             getCurrentAutoCapsState(), getCurrentRecapitalizeState());
                     return kotlin.Unit.INSTANCE;

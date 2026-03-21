@@ -46,7 +46,7 @@ Enter your server URL and auth token in **Settings > Voice Input**, then tap **T
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.5.1" ./build.sh
+VIBEVOICE_VERSION="0.5.2" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -104,7 +104,7 @@ All paths relative to `app/src/main/`:
 | File | Changes |
 |---|---|
 | `AndroidManifest.xml` | Added `RECORD_AUDIO` and `INTERNET` permissions, network security configuration, `VoicePermissionActivity` registration. |
-| `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. Voice text insertion uses character-by-character `commitText` outside any batch edit (for RustDesk compatibility) with explicit `finishComposingText` after insertion (for WebView editor compatibility). |
+| `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. Voice text insertion uses a single composition session (`setComposingText` per character, then `commitText` with the full string) for compatibility with both remote desktop applications (RustDesk, TeamViewer) and WebView-based editors (Google Gemini). |
 | `java/.../latin/inputlogic/InputLogic.java` | Clipboard paste (`onTextInput`) inserts text character by character for RustDesk compatibility. |
 | `java/.../latin/InputAttributes.java` | Removed conditions that hid the mic key when no system voice IME was installed. Voice key now shows on all non-password fields. |
 | `java/.../latin/settings/Settings.java` | Added `PREF_VIBEVOICE_SERVER_URL` and `PREF_VIBEVOICE_AUTH_TOKEN` preference keys. |
@@ -117,11 +117,13 @@ All paths relative to `app/src/main/`:
 
 ## Release notes
 
+### vibevoice-v0.5.2
+
+- **Fix: the Google Gemini Android application (and other WebView-based editors) dropped the last portion of voice-typed text when the user pressed Send.** Rewrote text insertion to use a single composition session: the text grows character by character via `setComposingText`, then one final `commitText` closes the composition with the full string. This matches how Android keyboards normally type (Gboard uses the same pattern for English). WebView/React apps defer state reconciliation until `compositionend`, so the full text is captured reliably. The previous approach (per-character `commitText`) fired 500 separate composition cycles, causing React's batched re-renders to overwrite the text field with a truncated value. RustDesk and TeamViewer remote desktop sessions continue to work because each `setComposingText` still triggers an individual change notification in the text field.
+
 ### vibevoice-v0.5.1
 
 - **Fix: voice typing into RustDesk remote sessions stopped working in v0.5.0.** v0.5.0 incorrectly wrapped the character insertion loop in a batch edit, which collapsed all per-character change notifications into one. RustDesk needs to see each character arrive individually. Reverted to the original unbatched loop.
-
-- **Fix: the Google Gemini Android application (and other WebView-based editors) dropped the last portion of voice-typed text on Send.** After inserting voice text, the keyboard marked the last word as "composing" (Android's underlined in-progress state) to offer autocorrect suggestions. WebView-based editors discard composing text on submit. Voice-typed text is now fully committed. This is why typing one character after voice input used to "fix" it — the manual keystroke finalized the composing text.
 
 ### vibevoice-v0.5.0
 
