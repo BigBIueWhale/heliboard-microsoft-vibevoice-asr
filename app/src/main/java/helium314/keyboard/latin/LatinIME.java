@@ -706,6 +706,12 @@ public class LatinIME extends InputMethodService implements
                     // Commit the full string — closes the composition session,
                     // fires compositionend, and finalizes all text.
                     mInputLogic.mConnection.commitText(text, 1);
+                    // Voice insertion bypasses InputLogic's event flow, so its internal
+                    // state (mLastComposedWord, mWordComposer, mSpaceState, …) would
+                    // otherwise describe the text from before this insertion. Without
+                    // this reset, the next backspace can trigger revertCommit on a word
+                    // that is no longer adjacent to the cursor.
+                    mInputLogic.onExternalTextInserted();
                     mKeyboardSwitcher.requestUpdatingShiftState(
                             getCurrentAutoCapsState(), getCurrentRecapitalizeState());
                     return kotlin.Unit.INSTANCE;

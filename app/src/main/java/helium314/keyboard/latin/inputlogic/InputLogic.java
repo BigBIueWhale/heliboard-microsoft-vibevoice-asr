@@ -2084,6 +2084,33 @@ public final class InputLogic {
     }
 
     /**
+     * Resets InputLogic state after an external source (voice input, etc.) has committed
+     * text to the editor via {@link #mConnection} directly — outside the normal
+     * {@link #onCodeInput}/{@link #onTextInput} event flow.
+     * <p>
+     * InputLogic's state model ({@link #mLastComposedWord}, {@link #mWordComposer},
+     * {@link #mSpaceState}, …) is event-driven: it tracks the editor based on what the
+     * keyboard itself has just typed. When text is committed without going through that
+     * flow, the model describes a reality that no longer exists. Acting on that stale
+     * model later — e.g. {@link #revertCommit} on backspace trying to delete a word that
+     * the cursor is no longer adjacent to — reads the wrong text and violates the
+     * invariant at {@code InputLogic.java:1843}, which in debug builds surfaces as a
+     * hard crash and in non-debug builds would silently delete the wrong characters.
+     * <p>
+     * Any code path that writes to the {@link RichInputConnection} outside InputLogic's
+     * event flow MUST call this immediately after the write.
+     */
+    public void onExternalTextInserted() {
+        resetComposingState(true /* alsoResetLastComposedWord */);
+        mSpaceState = SpaceState.NONE;
+        mEnteredText = null;
+        mWordBeingCorrectedByCursor = null;
+        mSuggestedWords = SuggestedWords.getEmptyInstance();
+        mSuggestionStripViewAccessor.setNeutralSuggestionStrip();
+        mRecapitalizeStatus.stop();
+    }
+
+    /**
      * Make a {@link helium314.keyboard.latin.SuggestedWords} object containing a typed word
      * and obsolete suggestions.
      * See {@link helium314.keyboard.latin.SuggestedWords#getTypedWordAndPreviousSuggestions(

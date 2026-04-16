@@ -46,7 +46,7 @@ Enter your server URL and auth token in **Settings > Voice Input**, then tap **T
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.5.2" ./build.sh
+VIBEVOICE_VERSION="0.5.3" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -116,6 +116,11 @@ All paths relative to `app/src/main/`:
 ---
 
 ## Release notes
+
+### vibevoice-v0.5.3
+
+- **Fix: pressing backspace right after voice input crashed the keyboard.** If the word committed immediately before voice input was an autocorrection (or other revertable commit), the first backspace after voice transcription would trigger `revertCommit` on text that was no longer adjacent to the cursor, raising `RuntimeException: revertCommit check failed`. Voice input now resets the keyboard's internal state model after committing, so backspace after voice behaves like backspace after any other text — it just deletes one character. This latent bug was unmasked in v0.5.1 when `restartSuggestionsOnWordTouchedByCursor` was removed to fix Gemini compatibility; that call had been incidentally clearing the stale state as a side effect.
+- **Fix: Android system crashes (reboot, framework OOM) were misattributed to the keyboard.** When the Android `system_server` process dies, any keyboard IPC into it throws `DeadSystemException`/`DeadSystemRuntimeException`. The uncaught-exception handler now recognises these and skips the crash report — the OS is going to kill every running app anyway, so reporting it as a keyboard bug was noise.
 
 ### vibevoice-v0.5.2
 

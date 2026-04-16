@@ -8,6 +8,7 @@ package helium314.keyboard.latin.define
 
 import android.content.Context
 import android.os.Build
+import android.os.DeadObjectException
 import helium314.keyboard.latin.BuildConfig
 import helium314.keyboard.latin.settings.DebugSettings
 import helium314.keyboard.latin.settings.Defaults
@@ -46,6 +47,17 @@ private class CrashReportExceptionHandler(val appContext: Context) : Thread.Unca
     }
 
     override fun uncaughtException(t: Thread, e: Throwable) {
+        if (isCausedBySystemDeath(e)) {
+            // The Android system_server process is dying — reboot, OOM-kill of the
+            // system, or framework-internal crash. Every IPC into the system from
+            // this process will now fail with DeadSystemException; the OS will kill
+            // this process shortly. It is not an app bug and not actionable, so
+            // skip the crash report (which would otherwise misattribute the fault
+            // to the keyboard) and let the default handler terminate us cleanly.
+            defaultUncaughtExceptionHandler?.uncaughtException(t, e)
+            return
+        }
+
         val stackTrace = StringWriter()
 
         e.printStackTrace(PrintWriter(stackTrace))
@@ -60,6 +72,27 @@ Last log:
 ${Log.getLog(100).joinToString("\n")}
 """)
         defaultUncaughtExceptionHandler!!.uncaughtException(t, e)
+    }
+
+    /**
+     * Detects system-process death via DeadObjectException and its subclasses.
+     * <p>
+     * Two forms are possible:
+     *   • DeadObjectException / DeadSystemException — thrown directly, or appearing
+     *     as a cause further down the chain.
+     *   • DeadSystemRuntimeException (API 33+) — wraps DeadSystemException as its
+     *     cause, so walking the chain catches it too.
+     * Class-hierarchy-agnostic name matching guards against API-level gaps.
+     */
+    private fun isCausedBySystemDeath(e: Throwable): Boolean {
+        var cause: Throwable? = e
+        val seen = HashSet<Throwable>()
+        while (cause != null && seen.add(cause)) {
+            if (cause is DeadObjectException) return true
+            if (cause.javaClass.name == "android.os.DeadSystemRuntimeException") return true
+            cause = cause.cause
+        }
+        return false
     }
 
     private fun writeCrashReportToFile(text: String) {
