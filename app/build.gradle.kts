@@ -5,14 +5,17 @@ plugins {
     kotlin("plugin.compose") version "2.0.0"
 }
 
-val vibevoiceVersion: String = providers.environmentVariable("VIBEVOICE_VERSION").getOrElse("0.0.0-dev")
+val vibevoiceVersion: String = providers.environmentVariable("VIBEVOICE_VERSION").getOrElse("0.0.1-dev")
 val vibevoiceVersionCode: Int = run {
     // Parse semver "X.Y.Z" into integer XYYZZZ (e.g. "0.1.0" -> 100, "1.2.3" -> 1002003)
-    val parts = vibevoiceVersion.split("-")[0].split(".").map { it.toIntOrNull() ?: 0 }
-    val major = parts.getOrElse(0) { 0 }
-    val minor = parts.getOrElse(1) { 0 }
-    val patch = parts.getOrElse(2) { 0 }
-    major * 1_000_000 + minor * 1_000 + patch
+    val match = Regex("""^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$""").matchEntire(vibevoiceVersion)
+        ?: throw GradleException("VIBEVOICE_VERSION must be semver-like, for example 0.5.3 or 0.5.3-dev")
+    val major = match.groupValues[1].toInt()
+    val minor = match.groupValues[2].toInt()
+    val patch = match.groupValues[3].toInt()
+    (major * 1_000_000 + minor * 1_000 + patch).also {
+        require(it > 0) { "VIBEVOICE_VERSION must produce a positive Android versionCode" }
+    }
 }
 
 android {

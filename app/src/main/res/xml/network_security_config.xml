@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Network security config. The VibeVoice client handles self-signed
-    certificates programmatically via createTrustAllSslContext().
+    The VVV client builds its own fail-closed TLS context from user-provided
+    pinned server certificate and mTLS client certificate/key material.
+    Do not add a permissive trust anchor here.
 -->
 <network-security-config />

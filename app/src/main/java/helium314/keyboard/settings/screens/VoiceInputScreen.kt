@@ -20,7 +20,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import helium314.keyboard.latin.R
 import helium314.keyboard.latin.settings.Defaults
 import helium314.keyboard.latin.settings.Settings
-import helium314.keyboard.latin.utils.prefs
+import helium314.keyboard.latin.utils.protectedPrefs
 import helium314.keyboard.latin.voice.RecordingStore
 import helium314.keyboard.latin.voice.VibeVoiceClient
 import helium314.keyboard.settings.SearchSettingsScreen
@@ -44,6 +44,9 @@ fun VoiceInputScreen(
     val items = listOf(
         Settings.PREF_VIBEVOICE_SERVER_URL,
         Settings.PREF_VIBEVOICE_AUTH_TOKEN,
+        Settings.PREF_VIBEVOICE_SERVER_CERTIFICATE,
+        Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
+        Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY,
         SettingsWithoutKey.VIBEVOICE_TEST_CONNECTION,
         SettingsWithoutKey.VIBEVOICE_SAVED_RECORDINGS,
         SettingsWithoutKey.VIBEVOICE_SETUP_LINK,
@@ -60,11 +63,15 @@ fun createVoiceInputSettings(context: Context) = listOf(
         R.string.vibevoice_server_url_title, R.string.vibevoice_server_url_description)
     { setting ->
         var showDialog by rememberSaveable { mutableStateOf(false) }
-        val prefs = LocalContext.current.prefs()
+        val prefs = LocalContext.current.protectedPrefs()
         val currentUrl = prefs.getString(setting.key, Defaults.PREF_VIBEVOICE_SERVER_URL) ?: ""
         Preference(
             name = setting.title,
-            description = currentUrl.ifBlank { stringResource(R.string.vibevoice_not_configured_short) },
+            description = if (VibeVoiceClient.normalizeServerUrl(currentUrl) == null) {
+                stringResource(R.string.vibevoice_not_configured_short)
+            } else {
+                currentUrl
+            },
             onClick = { showDialog = true }
         )
         if (showDialog) {
@@ -73,8 +80,11 @@ fun createVoiceInputSettings(context: Context) = listOf(
                 title = { Text(stringResource(R.string.vibevoice_server_url_title)) },
                 textInputLabel = { Text(stringResource(R.string.vibevoice_server_url_description)) },
                 initialText = currentUrl,
-                onConfirmed = { prefs.edit().putString(setting.key, it.trim()).apply() },
-                checkTextValid = { it.isBlank() || it.trim().startsWith("https://") }
+                onConfirmed = {
+                    val normalized = VibeVoiceClient.normalizeServerUrl(it) ?: ""
+                    prefs.edit().putString(setting.key, normalized).apply()
+                },
+                checkTextValid = { it.isBlank() || VibeVoiceClient.normalizeServerUrl(it) != null }
             )
         }
     },
@@ -82,12 +92,15 @@ fun createVoiceInputSettings(context: Context) = listOf(
         R.string.vibevoice_auth_token_title, R.string.vibevoice_auth_token_description)
     { setting ->
         var showDialog by rememberSaveable { mutableStateOf(false) }
-        val prefs = LocalContext.current.prefs()
+        val prefs = LocalContext.current.protectedPrefs()
         val currentToken = prefs.getString(setting.key, Defaults.PREF_VIBEVOICE_AUTH_TOKEN) ?: ""
-        val maskedPreview = if (currentToken.length > 8)
+        val maskedPreview = if (!VibeVoiceClient.isBearerToken(currentToken)) {
+            stringResource(R.string.vibevoice_not_configured_short)
+        } else if (currentToken.length > 8) {
             currentToken.take(4) + "..." + currentToken.takeLast(4)
-        else if (currentToken.isNotBlank()) "****"
-        else stringResource(R.string.vibevoice_not_configured_short)
+        } else {
+            "****"
+        }
         Preference(
             name = setting.title,
             description = maskedPreview,
@@ -101,8 +114,36 @@ fun createVoiceInputSettings(context: Context) = listOf(
                 initialText = currentToken,
                 onConfirmed = { prefs.edit().putString(setting.key, it.trim()).apply() },
                 keyboardType = KeyboardType.Password,
+                checkTextValid = { it.isBlank() || VibeVoiceClient.isBearerToken(it) },
             )
         }
+    },
+    Setting(context, Settings.PREF_VIBEVOICE_SERVER_CERTIFICATE,
+        R.string.vibevoice_server_certificate_title, R.string.vibevoice_server_certificate_description)
+    { setting ->
+        PemPreference(
+            setting = setting,
+            default = Defaults.PREF_VIBEVOICE_SERVER_CERTIFICATE,
+            validate = VibeVoiceClient::isCertificatePem,
+        )
+    },
+    Setting(context, Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
+        R.string.vibevoice_client_certificate_title, R.string.vibevoice_client_certificate_description)
+    { setting ->
+        PemPreference(
+            setting = setting,
+            default = Defaults.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
+            validate = VibeVoiceClient::isCertificatePem,
+        )
+    },
+    Setting(context, Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY,
+        R.string.vibevoice_client_private_key_title, R.string.vibevoice_client_private_key_description)
+    { setting ->
+        PemPreference(
+            setting = setting,
+            default = Defaults.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY,
+            validate = VibeVoiceClient::isPrivateKeyPem,
+        )
     },
     Setting(context, SettingsWithoutKey.VIBEVOICE_TEST_CONNECTION,
         R.string.vibevoice_test_connection, R.string.vibevoice_test_connection_description)
@@ -161,13 +202,49 @@ fun createVoiceInputSettings(context: Context) = listOf(
             name = it.title,
             description = it.description,
             onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/NatanFreeman/vibe-voice-vendor"))
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/BigBIueWhale/vibe-voice-vendor-1"))
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 ctx.startActivity(intent)
             }
         )
     },
 )
+
+@Composable
+private fun PemPreference(
+    setting: Setting,
+    default: String,
+    validate: (String) -> Boolean,
+) {
+    var showDialog by rememberSaveable { mutableStateOf(false) }
+    val prefs = LocalContext.current.protectedPrefs()
+    val currentValue = prefs.getString(setting.key, default) ?: ""
+    val configured = currentValue.isNotBlank() && validate(currentValue)
+    Preference(
+        name = setting.title,
+        description = if (configured) {
+            stringResource(R.string.vibevoice_configured_short)
+        } else {
+            stringResource(R.string.vibevoice_not_configured_short)
+        },
+        onClick = { showDialog = true }
+    )
+    if (showDialog) {
+        TextInputDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(setting.title) },
+            textInputLabel = { Text(setting.description ?: "") },
+            initialText = currentValue,
+            singleLine = false,
+            onConfirmed = {
+                val normalized = if (it.isBlank()) "" else VibeVoiceClient.normalizePem(it)
+                prefs.edit().putString(setting.key, normalized).apply()
+            },
+            keyboardType = KeyboardType.Password,
+            checkTextValid = { it.isBlank() || validate(it) },
+        )
+    }
+}
 
 @Preview
 @Composable

@@ -168,6 +168,9 @@ object Defaults {
     const val PREF_SHOW_DEBUG_SETTINGS = false
     const val PREF_VIBEVOICE_SERVER_URL = ""
     const val PREF_VIBEVOICE_AUTH_TOKEN = ""
+    const val PREF_VIBEVOICE_SERVER_CERTIFICATE = ""
+    const val PREF_VIBEVOICE_CLIENT_CERTIFICATE = ""
+    const val PREF_VIBEVOICE_CLIENT_PRIVATE_KEY = ""
     val PREF_DEBUG_MODE = BuildConfig.DEBUG
     const val PREF_SHOW_SUGGESTION_INFOS = false
     const val PREF_FORCE_NON_DISTINCT_MULTITOUCH = false

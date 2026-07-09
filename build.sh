@@ -17,7 +17,7 @@ GRADLE_WRAPPER_VERSION="8.14"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 
-VIBEVOICE_VERSION="${VIBEVOICE_VERSION:-0.0.0-dev}"
+VIBEVOICE_VERSION="${VIBEVOICE_VERSION:-0.0.1-dev}"
 export VIBEVOICE_VERSION
 
 APK_RELATIVE="app/build/outputs/apk/debug/HeliBoard-VibeVoice_${VIBEVOICE_VERSION}-debug.apk"
@@ -43,6 +43,11 @@ fail()  {
     done
     exit 1
 }
+
+if [[ ! "$VIBEVOICE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    fail "Invalid VIBEVOICE_VERSION: $VIBEVOICE_VERSION" \
+         "Expected a semver-like version such as 0.5.3 or 0.5.3-dev."
+fi
 
 # ──────────────────────────────────────────────────────────────
 # 1. Project directory
@@ -245,7 +250,12 @@ if grep -rq "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9" "$PROJECT_DIR/app/src/main/" 
          "The auth token should be configured via Settings, not hardcoded." \
          "Check VibeVoiceClient.kt."
 fi
-pass "No hardcoded secrets in source"
+if grep -rq "checkServerTrusted(chain.*) {}\\|HostnameVerifier .*-> true\\|HostnameVerifier { _, _ -> true\\|createTrustAllSslContext" "$PROJECT_DIR/app/src/main/" 2>/dev/null; then
+    fail "Permissive TLS code found in source code." \
+         "The VVV client must use pinned server-certificate trust, default hostname verification, and mTLS." \
+         "Check VibeVoiceClient.kt and network_security_config.xml."
+fi
+pass "No hardcoded secrets or permissive TLS in source"
 
 printf "\n${GREEN}${BOLD}All checks passed.${NC}\n"
 

@@ -184,6 +184,9 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
     // VibeVoice ASR settings
     public static final String PREF_VIBEVOICE_SERVER_URL = "vibevoice_server_url";
     public static final String PREF_VIBEVOICE_AUTH_TOKEN = "vibevoice_auth_token";
+    public static final String PREF_VIBEVOICE_SERVER_CERTIFICATE = "vibevoice_server_certificate";
+    public static final String PREF_VIBEVOICE_CLIENT_CERTIFICATE = "vibevoice_client_certificate";
+    public static final String PREF_VIBEVOICE_CLIENT_PRIVATE_KEY = "vibevoice_client_private_key";
 
     private Context mContext;
     private SharedPreferences mPrefs;
@@ -207,6 +210,9 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
         add(PREF_SELECTED_SUBTYPE);
         add(PREF_VIBEVOICE_SERVER_URL);
         add(PREF_VIBEVOICE_AUTH_TOKEN);
+        add(PREF_VIBEVOICE_SERVER_CERTIFICATE);
+        add(PREF_VIBEVOICE_CLIENT_CERTIFICATE);
+        add(PREF_VIBEVOICE_CLIENT_PRIVATE_KEY);
     }};
 
     public static Settings getInstance() {
