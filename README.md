@@ -48,7 +48,7 @@ Enter the VVV server URL, bearer token, server certificate, client certificate, 
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.5.3" ./build.sh
+VIBEVOICE_VERSION="0.6.0" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -118,6 +118,18 @@ All paths relative to `app/src/main/`:
 ---
 
 ## Release notes
+
+### vibevoice-v0.6.0
+
+Security/API redesign for the hardened VVV public server.
+
+- **Breaking change: the keyboard now supports only the hardened VVV API.** The old bearer-only/trust-all Android client path is gone. Voice input requires the new server URL, raw ES256 token, pinned server certificate, mTLS client certificate, and unencrypted PKCS#8 EC client private key.
+- **TLS is fail-closed.** The client uses TLS 1.3 only, default hostname verification, a trust store containing only the configured server certificate, and a client certificate/key presented through Android's TLS stack. There is no permissive trust manager, hostname-verifier bypass, or compatibility fallback.
+- **Health checks and transcription use the same authentication path.** `Test Connection` now verifies the real transport model: TLS 1.3, server certificate pinning, mTLS, and bearer auth.
+- **Server-controlled SSE input is bounded.** The client limits SSE line size, per-event data size, and accumulated transcription size so a compromised or buggy server cannot force unbounded client memory growth.
+- **Configuration is validated at entry and at use.** Settings reject malformed HTTPS origins, bearer tokens, certificates, and EC private keys. Invalid stored values are treated as not configured.
+- **VVV secrets moved to credential-protected preferences.** Server URL, token, certificate, and key material are no longer stored in the direct-boot preference store.
+- **Build defaults are self-validating.** The default hand-run build version now produces a valid Android `versionCode`; malformed `VIBEVOICE_VERSION` values fail clearly, and the build script rejects reintroduced permissive TLS patterns.
 
 ### vibevoice-v0.5.3
 
