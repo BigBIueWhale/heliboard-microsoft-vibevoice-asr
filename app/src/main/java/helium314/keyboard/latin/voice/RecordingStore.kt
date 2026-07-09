@@ -38,7 +38,6 @@ class RecordingStore(context: Context) {
 
     init {
         clearStaleMarkers()
-        deleteLegacyRecordings()
     }
 
     /** Create a new timestamped WAV file path. Enforces the storage cap first. */
@@ -182,20 +181,6 @@ class RecordingStore(context: Context) {
             isDone = doneFile.exists(),
             transcriptionText = if (txtFile.exists()) txtFile.readText() else null
         )
-    }
-
-    /** Delete recordings created with the old yyyyMMdd_HHmmss naming (no millis). */
-    private fun deleteLegacyRecordings() {
-        val allFiles = recordingsDir.listFiles() ?: return
-        // Legacy WAV names match "recording_XXXXXXXX_XXXXXX.wav" (8+6 digits).
-        // Current names have an extra "_SSS" suffix making them longer.
-        val legacyPattern = Regex("^recording_\\d{8}_\\d{6}\\.")
-        for (file in allFiles) {
-            if (legacyPattern.containsMatchIn(file.name)) {
-                Log.i(TAG, "Deleting legacy recording file: ${file.name}")
-                file.delete()
-            }
-        }
     }
 
     private fun parseTimestamp(name: String): Long {

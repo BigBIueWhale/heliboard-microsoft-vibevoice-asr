@@ -48,7 +48,7 @@ Import the VVV client bundle in **Settings > Voice Input > Import Client Bundle*
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.6.3" ./build.sh
+VIBEVOICE_VERSION="0.6.4" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -120,6 +120,10 @@ All paths relative to `app/src/main/`:
 
 ## Release notes
 
+### vibevoice-v0.6.4
+
+- **Single current configuration path.** VVV voice input source now contains only the current bundle import and current preference keys. There is no migration or compatibility cleanup path for previous VVV API shapes.
+
 ### vibevoice-v0.6.3
 
 - **One-file VVV client import.** Voice Input now has an `Import Client Bundle` action that accepts the server-generated `keys/client-bundle.vvv.json` payload containing the server URL, server public key pin, client certificate, and client private key.
@@ -130,12 +134,10 @@ All paths relative to `app/src/main/`:
 
 - **VVV public API v3.** Voice input now uses exactly four configured fields: server URL, server public key pin, client certificate, and client private key.
 - **mTLS is the application identity.** The keyboard does not store, validate, or send an application auth secret. The server derives client identity from the client certificate used in the TLS handshake.
-- **Fresh settings namespace.** Current VVV settings use `vvv_public_api_v3_*` keys and older VVV public API settings are purged from both credential- and device-protected preference stores.
 
 ### vibevoice-v0.6.1
 
 - **Fix: server identity is now exact pinned public key, not hostname/SAN authority.** The VVV client treats the Server URL only as a routing locator and accepts a TLS peer only when the leaf certificate public key matches the configured `sha256/...` SPKI pin. No public CA, DNS name, certificate SAN, or Android hostname verifier result can authorize a server.
-- **Fix: fresh installs/updates cannot reuse older VVV app data.** The client uses a dedicated VVV public API preference namespace and purges older certificate-based settings from both credential- and device-protected preference stores.
 
 ### vibevoice-v0.6.0
 

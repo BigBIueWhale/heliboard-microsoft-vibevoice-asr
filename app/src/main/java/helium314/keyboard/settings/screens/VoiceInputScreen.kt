@@ -59,7 +59,6 @@ fun VoiceInputScreen(
 }
 
 fun createVoiceInputSettings(context: Context): List<Setting> {
-    VibeVoiceClient.forgetLegacyConfiguration(context)
     return listOf(
         Setting(context, SettingsWithoutKey.VIBEVOICE_IMPORT_BUNDLE,
             R.string.vibevoice_import_bundle_title, R.string.vibevoice_import_bundle_description)

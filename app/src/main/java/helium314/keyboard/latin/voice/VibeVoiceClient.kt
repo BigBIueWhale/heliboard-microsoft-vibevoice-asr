@@ -2,8 +2,6 @@
 package helium314.keyboard.latin.voice
 
 import android.content.Context
-import android.content.SharedPreferences
-import android.os.Build
 import android.util.Base64
 import helium314.keyboard.latin.settings.Defaults
 import helium314.keyboard.latin.settings.Settings
@@ -84,37 +82,9 @@ class VibeVoiceClient private constructor(
         private const val MAX_CLIENT_BUNDLE_CHARS = 128 * 1024
         private const val CLIENT_BUNDLE_TYPE = "vvv-client-config"
         private const val CLIENT_BUNDLE_VERSION = 1
-        private val legacyPreferenceKeys = setOf(
-            "vibevoice_server_url",
-            "vibevoice_auth_token",
-            "vibevoice_server_certificate",
-            "vibevoice_client_certificate",
-            "vibevoice_client_private_key",
-            "vvv_public_api_v1_server_url",
-            "vvv_public_api_v1_auth_token",
-            "vvv_public_api_v1_server_certificate",
-            "vvv_public_api_v1_client_certificate",
-            "vvv_public_api_v1_client_private_key",
-            "vvv_public_api_v2_server_url",
-            "vvv_public_api_v2_auth_token",
-            "vvv_public_api_v2_server_spki_pin",
-            "vvv_public_api_v2_client_certificate",
-            "vvv_public_api_v2_client_private_key",
-        )
 
         private val json = Json { ignoreUnknownKeys = true }
         private val clientBundleJson = Json { ignoreUnknownKeys = false }
-
-        /** Removes older VibeVoice public API configurations so stale state is never reused. */
-        @JvmStatic
-        fun forgetLegacyConfiguration(context: Context) {
-            legacyPreferenceStores(context).forEach { prefs ->
-                if (legacyPreferenceKeys.none { prefs.contains(it) }) return@forEach
-                prefs.edit().apply {
-                    legacyPreferenceKeys.forEach(::remove)
-                }.commit()
-            }
-        }
 
         /** Returns true only when all VVV public API credentials are present and well formed. */
         @JvmStatic
@@ -132,7 +102,6 @@ class VibeVoiceClient private constructor(
         @JvmStatic
         fun importClientBundle(context: Context, raw: String): Boolean {
             val bundle = parseClientImportBundle(raw) ?: return false
-            forgetLegacyConfiguration(context)
             return context.protectedPrefs().edit()
                 .putString(Settings.PREF_VIBEVOICE_SERVER_URL, bundle.serverUrl)
                 .putString(Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN, bundle.serverSpkiPin)
@@ -181,7 +150,6 @@ class VibeVoiceClient private constructor(
             raw.trim().replace("\r\n", "\n").replace('\r', '\n') + "\n"
 
         private fun loadConfig(context: Context): ClientConfig? {
-            forgetLegacyConfiguration(context)
             val prefs = context.protectedPrefs()
             return normalizeClientConfig(
                 serverUrlRaw = prefs.getString(
@@ -328,16 +296,6 @@ class VibeVoiceClient private constructor(
             }.getOrDefault(false)
         }
 
-        private fun legacyPreferenceStores(context: Context): List<SharedPreferences> {
-            val prefName = "${context.packageName}_preferences"
-            val stores = mutableListOf(context.getSharedPreferences(prefName, Context.MODE_PRIVATE))
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                context.createDeviceProtectedStorageContext()
-                    ?.getSharedPreferences(prefName, Context.MODE_PRIVATE)
-                    ?.let(stores::add)
-            }
-            return stores
-        }
     }
 
     private data class ClientConfig(
