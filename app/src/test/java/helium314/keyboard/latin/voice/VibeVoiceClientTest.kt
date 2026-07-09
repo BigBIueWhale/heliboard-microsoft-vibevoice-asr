@@ -24,20 +24,9 @@ class VibeVoiceClientTest {
         assertEquals(null, VibeVoiceClient.normalizeServerUrl("http://vvv.example.invalid:42862"))
         assertEquals(null, VibeVoiceClient.normalizeServerUrl("https://user@vvv.example.invalid:42862"))
         assertEquals(null, VibeVoiceClient.normalizeServerUrl("https://vvv.example.invalid:42862/v1/transcribe"))
-        assertEquals(null, VibeVoiceClient.normalizeServerUrl("https://vvv.example.invalid:42862?token=abc.def.ghi"))
+        assertEquals(null, VibeVoiceClient.normalizeServerUrl("https://vvv.example.invalid:42862?x=1"))
         assertEquals(null, VibeVoiceClient.normalizeServerUrl("https://vvv.example.invalid:42862/#fragment"))
         assertEquals(null, VibeVoiceClient.normalizeServerUrl("https://[2001:db8::10]:42862"))
-    }
-
-    @Test fun `auth token is a raw bearer JWT string`() {
-        assertTrue(VibeVoiceClient.isBearerToken("aaa.bbb.ccc"))
-        assertTrue(VibeVoiceClient.isBearerToken("aaa.bbb.ccc\n"))
-
-        assertFalse(VibeVoiceClient.isBearerToken(""))
-        assertFalse(VibeVoiceClient.isBearerToken("Bearer aaa.bbb.ccc"))
-        assertFalse(VibeVoiceClient.isBearerToken("aaa.bbb"))
-        assertFalse(VibeVoiceClient.isBearerToken("aaa.bbb.ccc ddd"))
-        assertFalse(VibeVoiceClient.isBearerToken("aaa.bbb.\nccc"))
     }
 
     @Test fun `PEM validation rejects wrong material types`() {
@@ -89,10 +78,14 @@ class VibeVoiceClientTest {
             "vvv_public_api_v1_server_certificate",
             "vvv_public_api_v1_client_certificate",
             "vvv_public_api_v1_client_private_key",
+            "vvv_public_api_v2_server_url",
+            "vvv_public_api_v2_auth_token",
+            "vvv_public_api_v2_server_spki_pin",
+            "vvv_public_api_v2_client_certificate",
+            "vvv_public_api_v2_client_private_key",
         )
 
         assertFalse(Settings.PREF_VIBEVOICE_SERVER_URL in legacyKeys)
-        assertFalse(Settings.PREF_VIBEVOICE_AUTH_TOKEN in legacyKeys)
         assertFalse(Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN in legacyKeys)
         assertFalse(Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE in legacyKeys)
         assertFalse(Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY in legacyKeys)
@@ -101,12 +94,19 @@ class VibeVoiceClientTest {
     @Test fun `legacy VibeVoice preferences are purged from credential and device stores`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefName = "${context.packageName}_preferences"
-        val legacyKeys = listOf("vibevoice_server_url", "vibevoice_auth_token")
+        val legacyKeys = listOf(
+            "vibevoice_server_url",
+            "vibevoice_auth_token",
+            "vvv_public_api_v2_server_url",
+            "vvv_public_api_v2_auth_token",
+        )
 
         val credentialPrefs = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
         credentialPrefs.edit()
             .putString("vibevoice_server_url", "https://legacy.example.invalid")
             .putString("vibevoice_auth_token", "aaa.bbb.ccc")
+            .putString("vvv_public_api_v2_server_url", "https://v2.example.invalid")
+            .putString("vvv_public_api_v2_auth_token", "aaa.bbb.ccc")
             .commit()
 
         val devicePrefs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -118,6 +118,8 @@ class VibeVoiceClientTest {
         devicePrefs?.edit()
             ?.putString("vibevoice_server_url", "https://legacy.example.invalid")
             ?.putString("vibevoice_auth_token", "aaa.bbb.ccc")
+            ?.putString("vvv_public_api_v2_server_url", "https://v2.example.invalid")
+            ?.putString("vvv_public_api_v2_auth_token", "aaa.bbb.ccc")
             ?.commit()
 
         VibeVoiceClient.forgetLegacyConfiguration(context)

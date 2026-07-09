@@ -51,7 +51,7 @@ import javax.net.ssl.X509TrustManager
  *
  * The server is intentionally exposed through exactly one public mode:
  * TLS 1.3, exact pinned server public-key trust, mandatory client certificate
- * authentication, and an ES256 bearer token on every HTTP request.
+ * authentication, and no application-layer authentication fallback.
  */
 class VibeVoiceClient private constructor(
     private val config: ClientConfig
@@ -77,11 +77,16 @@ class VibeVoiceClient private constructor(
             "vvv_public_api_v1_server_certificate",
             "vvv_public_api_v1_client_certificate",
             "vvv_public_api_v1_client_private_key",
+            "vvv_public_api_v2_server_url",
+            "vvv_public_api_v2_auth_token",
+            "vvv_public_api_v2_server_spki_pin",
+            "vvv_public_api_v2_client_certificate",
+            "vvv_public_api_v2_client_private_key",
         )
 
         private val json = Json { ignoreUnknownKeys = true }
 
-        /** Removes pre-hardened VibeVoice configuration so old bearer-only state is never reused. */
+        /** Removes older VibeVoice public API configurations so stale state is never reused. */
         @JvmStatic
         fun forgetLegacyConfiguration(context: Context) {
             legacyPreferenceStores(context).forEach { prefs ->
@@ -111,14 +116,6 @@ class VibeVoiceClient private constructor(
             if (uri.rawQuery != null || uri.rawFragment != null) return null
             if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return null
             return "https://${uri.rawAuthority}"
-        }
-
-        fun isBearerToken(raw: String): Boolean {
-            val token = raw.trim()
-            return token.isNotEmpty()
-                    && !token.startsWith("Bearer ", ignoreCase = true)
-                    && token.count { it == '.' } == 2
-                    && token.none { it.isWhitespace() }
         }
 
         fun normalizeServerSpkiPin(raw: String): String? {
@@ -156,12 +153,6 @@ class VibeVoiceClient private constructor(
                     Defaults.PREF_VIBEVOICE_SERVER_URL
                 ) ?: ""
             ) ?: return null
-            val token = (
-                    prefs.getString(
-                        Settings.PREF_VIBEVOICE_AUTH_TOKEN,
-                        Defaults.PREF_VIBEVOICE_AUTH_TOKEN
-                    ) ?: ""
-                    ).trim()
             val serverSpkiPin = normalizeServerSpkiPin(
                 prefs.getString(
                     Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
@@ -180,12 +171,10 @@ class VibeVoiceClient private constructor(
                     Defaults.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY
                 ) ?: ""
             )
-            if (!isBearerToken(token)) return null
             if (!isCertificatePem(clientCertificate)) return null
             if (!isPrivateKeyPem(clientPrivateKey)) return null
             return ClientConfig(
                 serverUrl = serverUrl,
-                authToken = token,
                 serverSpkiPin = serverSpkiPin,
                 clientCertificatePem = clientCertificate,
                 clientPrivateKeyPem = clientPrivateKey
@@ -255,7 +244,6 @@ class VibeVoiceClient private constructor(
 
     private data class ClientConfig(
         val serverUrl: String,
-        val authToken: String,
         val serverSpkiPin: String,
         val clientCertificatePem: String,
         val clientPrivateKeyPem: String
@@ -355,7 +343,6 @@ class VibeVoiceClient private constructor(
             this.doOutput = doOutput
             connectTimeout = 10_000
             readTimeout = 30_000
-            setRequestProperty("Authorization", "Bearer ${config.authToken}")
             setRequestProperty("Connection", "close")
         }
     }

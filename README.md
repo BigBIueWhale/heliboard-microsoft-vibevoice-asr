@@ -21,7 +21,7 @@ The voice typing is powered by [vibe-voice-vendor-1](https://github.com/BigBIueW
 1. Tap the mic icon in the keyboard toolbar — a landing menu appears
 2. Tap **New Recording** and speak — audio is captured as a 16 kHz mono WAV file and saved to disk immediately
 3. Tap anywhere to stop recording
-4. The audio is uploaded to your VVV server over TLS 1.3 with exact pinned server-public-key trust, mTLS client authentication, and an ES256 bearer token
+4. The audio is uploaded to your VVV server over TLS 1.3 with exact pinned server-public-key trust and mTLS client authentication
 5. The server streams back the transcription via Server-Sent Events
 6. The transcribed text is automatically typed into whatever text field you're using
 
@@ -31,7 +31,7 @@ If the keyboard is dismissed while recording or transcribing, the work continues
 
 ## The catch
 
-You need to run your own [vibe-voice-vendor-1](https://github.com/BigBIueWhale/vibe-voice-vendor-1) server on a machine with a decent GPU (tested on NVIDIA GeForce RTX 5090). The server runs the VibeVoice model via vLLM and exposes one authenticated public API: TLS 1.3, exact pinned server public-key identity, mandatory mTLS client certificate, and ES256 bearer token authentication.
+You need to run your own [vibe-voice-vendor-1](https://github.com/BigBIueWhale/vibe-voice-vendor-1) server on a machine with a decent GPU (tested on NVIDIA GeForce RTX 5090). The server runs the VibeVoice model via vLLM and exposes one authenticated public API: TLS 1.3, exact pinned server public-key identity, and mandatory mTLS client certificate authentication.
 
 Because the public server is TLS 1.3-only, VibeVoice voice input requires Android 10 or newer for the ASR connection. The keyboard can still run on older Android versions, but the hardened VVV voice client cannot connect from a platform TLS stack without TLS 1.3 support.
 
@@ -39,7 +39,7 @@ Once your server is up, configure it in the app:
 
 ![Settings menu — Voice Input](doc/settings_voice_input_menu.jpg)
 
-Enter the VVV server URL, server public key pin, bearer token, client certificate, and client private key in **Settings > Voice Input**, then tap **Test Connection** to verify the full authenticated transport path:
+Enter the VVV server URL, server public key pin, client certificate, and client private key in **Settings > Voice Input**, then tap **Test Connection** to verify the full authenticated transport path:
 
 ![Voice Input settings](doc/voice_input_settings.jpg)
 
@@ -48,7 +48,7 @@ Enter the VVV server URL, server public key pin, bearer token, client certificat
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.6.1" ./build.sh
+VIBEVOICE_VERSION="0.6.2" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -60,7 +60,7 @@ Download the latest APK from the [Releases](https://github.com/BigBIueWhale/heli
 1. Transfer the APK to your Android smartphone and install it (enable "Install from unknown sources" if prompted)
 2. Go to **Settings > System > Languages & input > On-screen keyboard** and enable **HeliBoard VibeVoice Debug**
 3. Open any text field, switch to HeliBoard VibeVoice via the keyboard icon in the navigation bar
-4. Open **HeliBoard VibeVoice Settings > Voice Input** and enter the server URL, server public key pin from `certs/self-signed/server-spki-pin.txt`, raw token from `keys/token.txt`, client certificate from `keys/client-cert.pem`, and client private key from `keys/client-key.pem`
+4. Open **HeliBoard VibeVoice Settings > Voice Input** and enter the server URL, server public key pin from `certs/self-signed/server-spki-pin.txt`, client certificate from `keys/client-cert.pem`, and client private key from `keys/client-key.pem`
 5. Tap the mic icon in the toolbar — grant the microphone permission on first use
 
 > **Note:** The APK is a debug build (signed with a debug key, app ID `helium314.keyboard.vibevoice.debug`). Minification is enabled so the APK size stays small. There is no release signing keystore configured.
@@ -90,11 +90,11 @@ All paths relative to `app/src/main/`:
 | File | Description |
 |---|---|
 | `java/.../voice/AudioRecorder.kt` | Records microphone audio to a WAV file (16 kHz, mono, 16-bit PCM). Reports RMS amplitude for the UI visualization. Releases the microphone in a `finally` block so it is never leaked. |
-| `java/.../voice/VibeVoiceClient.kt` | VVV API client. Multipart WAV upload and Server-Sent Events streaming over TLS 1.3 with exact server SPKI pin verification, mandatory mTLS client certificate/key, and ES256 bearer token authentication. URL hostnames are routing inputs, not trust authority. Bounds SSE line and transcript sizes so a server cannot force unbounded client memory growth. |
+| `java/.../voice/VibeVoiceClient.kt` | VVV API client. Multipart WAV upload and Server-Sent Events streaming over TLS 1.3 with exact server SPKI pin verification and mandatory mTLS client certificate/key. URL hostnames are routing inputs, not trust authority. Bounds SSE line and transcript sizes so a server cannot force unbounded client memory growth. |
 | `java/.../voice/VoiceInputController.kt` | Orchestrates the full voice input lifecycle: recording, transcription with retry, overlay UI (landing menu, amplitude bars, recordings list, status text). Theme-aware. |
 | `java/.../voice/RecordingStore.kt` | File-based storage for WAV recordings and their transcriptions. Filesystem is the source of truth — marker files track transcription state. Cleans up stale state on startup. |
 | `java/.../voice/VoicePermissionActivity.kt` | Transparent activity to request `RECORD_AUDIO` permission (required because `InputMethodService` cannot show permission dialogs directly). |
-| `java/.../settings/screens/VoiceInputScreen.kt` | Settings screen for server URL, server public key pin, bearer token, mTLS client certificate/key, authenticated test connection, saved recordings, and setup link. |
+| `java/.../settings/screens/VoiceInputScreen.kt` | Settings screen for server URL, server public key pin, mTLS client certificate/key, authenticated test connection, saved recordings, and setup link. |
 | `java/.../settings/screens/SavedRecordingsScreen.kt` | Full management screen for saved recordings — transcribe, copy, delete individual or all recordings. |
 | `res/drawable/ic_settings_voice.xml` | Mic icon for the Voice Input settings entry. |
 | `res/xml/network_security_config.xml` | Empty Android network security configuration. The VVV client builds its own fail-closed pinned TLS/mTLS context in code. |
@@ -109,7 +109,7 @@ All paths relative to `app/src/main/`:
 | `java/.../latin/LatinIME.java` | Replaced `switchToShortcutIme` with `VoiceInputController` integration. Handles start/stop/cancel lifecycle. Voice text insertion uses a single composition session (`setComposingText` per character, then `commitText` with the full string) for compatibility with both remote desktop applications (RustDesk, TeamViewer) and WebView-based editors (Google Gemini). |
 | `java/.../latin/inputlogic/InputLogic.java` | Clipboard paste (`onTextInput`) inserts text character by character for RustDesk compatibility. |
 | `java/.../latin/InputAttributes.java` | Removed conditions that hid the mic key when no system voice IME was installed. Voice key now shows on all non-password fields. |
-| `java/.../latin/settings/Settings.java` | Added VVV server URL, server public key pin, bearer token, client certificate, and client private key preference keys. |
+| `java/.../latin/settings/Settings.java` | Added VVV server URL, server public key pin, client certificate, and client private key preference keys. |
 | `java/.../latin/settings/Defaults.kt` | Added empty-string defaults for VVV preferences. |
 | `java/.../settings/SettingsContainer.kt` | Registered Voice Input settings factory. |
 | `java/.../settings/SettingsNavHost.kt` | Added `VoiceInput` navigation route. |
@@ -119,21 +119,27 @@ All paths relative to `app/src/main/`:
 
 ## Release notes
 
+### vibevoice-v0.6.2
+
+- **VVV public API v3.** Voice input now uses exactly four configured fields: server URL, server public key pin, client certificate, and client private key.
+- **mTLS is the application identity.** The keyboard does not store, validate, or send an application auth secret. The server derives client identity from the client certificate used in the TLS handshake.
+- **Fresh settings namespace.** Current VVV settings use `vvv_public_api_v3_*` keys and older VVV public API settings are purged from both credential- and device-protected preference stores.
+
 ### vibevoice-v0.6.1
 
 - **Fix: server identity is now exact pinned public key, not hostname/SAN authority.** The VVV client treats the Server URL only as a routing locator and accepts a TLS peer only when the leaf certificate public key matches the configured `sha256/...` SPKI pin. No public CA, DNS name, certificate SAN, or Android hostname verifier result can authorize a server.
-- **Fix: fresh installs/updates cannot reuse pre-hardened or v0.6.0 VVV app data.** The client uses new `vvv_public_api_v2_*` preference keys and purges the old bearer-only and v0.6.0 certificate-based keys from both credential- and device-protected preference stores.
+- **Fix: fresh installs/updates cannot reuse older VVV app data.** The client uses a dedicated VVV public API preference namespace and purges older certificate-based settings from both credential- and device-protected preference stores.
 
 ### vibevoice-v0.6.0
 
 Security/API redesign for the hardened VVV public server.
 
-- **Breaking change: the keyboard now supports only the hardened VVV API.** The old bearer-only/trust-all Android client path is gone. Voice input requires the new server URL, raw ES256 token, server public key pin, mTLS client certificate, and unencrypted PKCS#8 EC client private key.
+- **Breaking change: the keyboard now supports only the hardened VVV API.** Voice input requires the server URL, server public key pin, mTLS client certificate, and unencrypted PKCS#8 EC client private key.
 - **TLS is fail-closed.** The client uses TLS 1.3 only, exact server SPKI pin verification, and a client certificate/key presented through Android's TLS stack. There is no permissive trust manager, WebPKI fallback, hostname-as-authority mode, or compatibility fallback.
-- **Health checks and transcription use the same authentication path.** `Test Connection` now verifies the real transport model: TLS 1.3, server public key pinning, mTLS, and bearer auth.
+- **Health checks and transcription use the same authentication path.** `Test Connection` now verifies the real transport model: TLS 1.3, server public key pinning, and mTLS.
 - **Server-controlled SSE input is bounded.** The client limits SSE line size, per-event data size, and accumulated transcription size so a compromised or buggy server cannot force unbounded client memory growth.
-- **Configuration is validated at entry and at use.** Settings reject malformed HTTPS origins, bearer tokens, certificates, and EC private keys. Invalid stored values are treated as not configured.
-- **VVV secrets moved to credential-protected preferences.** Server URL, token, pin, certificate, and key material are no longer stored in the direct-boot preference store.
+- **Configuration is validated at entry and at use.** Settings reject malformed HTTPS origins, malformed server pins, certificates, and EC private keys. Invalid stored values are treated as not configured.
+- **VVV secrets moved to credential-protected preferences.** Server URL, pin, certificate, and key material are not stored in the direct-boot preference store.
 - **Build defaults are self-validating.** The default hand-run build version now produces a valid Android `versionCode`; malformed `VIBEVOICE_VERSION` values fail clearly, and the build script rejects reintroduced permissive TLS patterns.
 
 ### vibevoice-v0.5.3
@@ -200,11 +206,11 @@ Internal release (superseded by v0.4.0).
 Initial release. Fork of [HeliBoard v3.5](https://github.com/Helium314/HeliBoard/releases/tag/v3.5) with the stock voice input completely replaced by a custom VibeVoice ASR client.
 
 - Voice typing via a self-hosted [vibe-voice-vendor-1](https://github.com/BigBIueWhale/vibe-voice-vendor-1) server (Microsoft VibeVoice model)
-- Records 16 kHz mono WAV audio on-device, uploads via TLS 1.3 with pinned server public-key identity, mTLS client certificate/key, and bearer token authentication
+- Records 16 kHz mono WAV audio on-device and uploads via TLS 1.3 with pinned server public-key identity and mTLS client certificate/key
 - Server streams back transcription via Server-Sent Events
 - Recording overlay with live amplitude visualization, themed to match keyboard colors
-- Settings screen for server URL, auth token, server public key pin, client certificate, client private key, and authenticated connection test
-- Supports the hardened VVV public proxy security model without trust-all TLS, hostname-verifier bypasses, or bearer-only compatibility mode
+- Settings screen for server URL, server public key pin, client certificate, client private key, and authenticated connection test
+- Supports the hardened VVV public proxy security model without trust-all TLS or hostname-verifier bypasses
 - Multilingual — transcription language depends on the VibeVoice model, not the keyboard layout
 - Debug APK build with minification enabled for small APK size
 - Automated releases via GitHub Actions on `vibevoice-v*` tags

@@ -43,7 +43,6 @@ fun VoiceInputScreen(
 ) {
     val items = listOf(
         Settings.PREF_VIBEVOICE_SERVER_URL,
-        Settings.PREF_VIBEVOICE_AUTH_TOKEN,
         Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
         Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
         Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY,
@@ -87,36 +86,6 @@ fun createVoiceInputSettings(context: Context): List<Setting> {
                     prefs.edit().putString(setting.key, normalized).apply()
                 },
                 checkTextValid = { it.isBlank() || VibeVoiceClient.normalizeServerUrl(it) != null }
-            )
-        }
-    },
-    Setting(context, Settings.PREF_VIBEVOICE_AUTH_TOKEN,
-        R.string.vibevoice_auth_token_title, R.string.vibevoice_auth_token_description)
-    { setting ->
-        var showDialog by rememberSaveable { mutableStateOf(false) }
-        val prefs = LocalContext.current.protectedPrefs()
-        val currentToken = prefs.getString(setting.key, Defaults.PREF_VIBEVOICE_AUTH_TOKEN) ?: ""
-        val maskedPreview = if (!VibeVoiceClient.isBearerToken(currentToken)) {
-            stringResource(R.string.vibevoice_not_configured_short)
-        } else if (currentToken.length > 8) {
-            currentToken.take(4) + "..." + currentToken.takeLast(4)
-        } else {
-            "****"
-        }
-        Preference(
-            name = setting.title,
-            description = maskedPreview,
-            onClick = { showDialog = true }
-        )
-        if (showDialog) {
-            TextInputDialog(
-                onDismissRequest = { showDialog = false },
-                title = { Text(stringResource(R.string.vibevoice_auth_token_title)) },
-                textInputLabel = { Text(stringResource(R.string.vibevoice_auth_token_description)) },
-                initialText = currentToken,
-                onConfirmed = { prefs.edit().putString(setting.key, it.trim()).apply() },
-                keyboardType = KeyboardType.Password,
-                checkTextValid = { it.isBlank() || VibeVoiceClient.isBearerToken(it) },
             )
         }
     },
