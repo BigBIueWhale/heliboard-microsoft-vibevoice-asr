@@ -44,7 +44,7 @@ fun VoiceInputScreen(
     val items = listOf(
         Settings.PREF_VIBEVOICE_SERVER_URL,
         Settings.PREF_VIBEVOICE_AUTH_TOKEN,
-        Settings.PREF_VIBEVOICE_SERVER_CERTIFICATE,
+        Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
         Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
         Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY,
         SettingsWithoutKey.VIBEVOICE_TEST_CONNECTION,
@@ -58,8 +58,10 @@ fun VoiceInputScreen(
     )
 }
 
-fun createVoiceInputSettings(context: Context) = listOf(
-    Setting(context, Settings.PREF_VIBEVOICE_SERVER_URL,
+fun createVoiceInputSettings(context: Context): List<Setting> {
+    VibeVoiceClient.forgetLegacyConfiguration(context)
+    return listOf(
+        Setting(context, Settings.PREF_VIBEVOICE_SERVER_URL,
         R.string.vibevoice_server_url_title, R.string.vibevoice_server_url_description)
     { setting ->
         var showDialog by rememberSaveable { mutableStateOf(false) }
@@ -118,14 +120,35 @@ fun createVoiceInputSettings(context: Context) = listOf(
             )
         }
     },
-    Setting(context, Settings.PREF_VIBEVOICE_SERVER_CERTIFICATE,
-        R.string.vibevoice_server_certificate_title, R.string.vibevoice_server_certificate_description)
+    Setting(context, Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
+        R.string.vibevoice_server_spki_pin_title, R.string.vibevoice_server_spki_pin_description)
     { setting ->
-        PemPreference(
-            setting = setting,
-            default = Defaults.PREF_VIBEVOICE_SERVER_CERTIFICATE,
-            validate = VibeVoiceClient::isCertificatePem,
+        var showDialog by rememberSaveable { mutableStateOf(false) }
+        val prefs = LocalContext.current.protectedPrefs()
+        val currentPin = prefs.getString(setting.key, Defaults.PREF_VIBEVOICE_SERVER_SPKI_PIN) ?: ""
+        Preference(
+            name = setting.title,
+            description = if (VibeVoiceClient.isServerSpkiPin(currentPin)) {
+                stringResource(R.string.vibevoice_configured_short)
+            } else {
+                stringResource(R.string.vibevoice_not_configured_short)
+            },
+            onClick = { showDialog = true }
         )
+        if (showDialog) {
+            TextInputDialog(
+                onDismissRequest = { showDialog = false },
+                title = { Text(stringResource(R.string.vibevoice_server_spki_pin_title)) },
+                textInputLabel = { Text(stringResource(R.string.vibevoice_server_spki_pin_description)) },
+                initialText = currentPin,
+                onConfirmed = {
+                    val normalized = VibeVoiceClient.normalizeServerSpkiPin(it) ?: ""
+                    prefs.edit().putString(setting.key, normalized).apply()
+                },
+                keyboardType = KeyboardType.Password,
+                checkTextValid = { it.isBlank() || VibeVoiceClient.isServerSpkiPin(it) },
+            )
+        }
     },
     Setting(context, Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
         R.string.vibevoice_client_certificate_title, R.string.vibevoice_client_certificate_description)
@@ -208,7 +231,8 @@ fun createVoiceInputSettings(context: Context) = listOf(
             }
         )
     },
-)
+    )
+}
 
 @Composable
 private fun PemPreference(

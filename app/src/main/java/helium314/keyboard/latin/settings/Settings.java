@@ -182,11 +182,11 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
     public static final String PREF_LIBRARY_CHECKSUM = "lib_checksum";
 
     // VibeVoice ASR settings
-    public static final String PREF_VIBEVOICE_SERVER_URL = "vibevoice_server_url";
-    public static final String PREF_VIBEVOICE_AUTH_TOKEN = "vibevoice_auth_token";
-    public static final String PREF_VIBEVOICE_SERVER_CERTIFICATE = "vibevoice_server_certificate";
-    public static final String PREF_VIBEVOICE_CLIENT_CERTIFICATE = "vibevoice_client_certificate";
-    public static final String PREF_VIBEVOICE_CLIENT_PRIVATE_KEY = "vibevoice_client_private_key";
+    public static final String PREF_VIBEVOICE_SERVER_URL = "vvv_public_api_v2_server_url";
+    public static final String PREF_VIBEVOICE_AUTH_TOKEN = "vvv_public_api_v2_auth_token";
+    public static final String PREF_VIBEVOICE_SERVER_SPKI_PIN = "vvv_public_api_v2_server_spki_pin";
+    public static final String PREF_VIBEVOICE_CLIENT_CERTIFICATE = "vvv_public_api_v2_client_certificate";
+    public static final String PREF_VIBEVOICE_CLIENT_PRIVATE_KEY = "vvv_public_api_v2_client_private_key";
 
     private Context mContext;
     private SharedPreferences mPrefs;
@@ -210,7 +210,7 @@ public final class Settings implements SharedPreferences.OnSharedPreferenceChang
         add(PREF_SELECTED_SUBTYPE);
         add(PREF_VIBEVOICE_SERVER_URL);
         add(PREF_VIBEVOICE_AUTH_TOKEN);
-        add(PREF_VIBEVOICE_SERVER_CERTIFICATE);
+        add(PREF_VIBEVOICE_SERVER_SPKI_PIN);
         add(PREF_VIBEVOICE_CLIENT_CERTIFICATE);
         add(PREF_VIBEVOICE_CLIENT_PRIVATE_KEY);
     }};

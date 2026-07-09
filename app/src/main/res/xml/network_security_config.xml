@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The VVV client builds its own fail-closed TLS context from user-provided
-    pinned server certificate and mTLS client certificate/key material.
+    The VVV client builds its own fail-closed TLS context from the user-provided
+    server SPKI pin and mTLS client certificate/key material.
     Do not add a permissive trust anchor here.
 -->
 <network-security-config />

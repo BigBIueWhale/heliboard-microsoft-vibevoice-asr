@@ -2,6 +2,8 @@
 package helium314.keyboard.latin.voice
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.os.Build
 import android.util.Base64
 import helium314.keyboard.latin.settings.Defaults
 import helium314.keyboard.latin.settings.Settings
@@ -24,25 +26,31 @@ import java.net.URL
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.Signature
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
+import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
+import javax.net.ssl.SSLPeerUnverifiedException
+import javax.net.ssl.SSLSession
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
-import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 /**
  * Client for the VVV public API.
  *
  * The server is intentionally exposed through exactly one public mode:
- * TLS 1.3, pinned server certificate trust, mandatory client certificate
+ * TLS 1.3, exact pinned server public-key trust, mandatory client certificate
  * authentication, and an ES256 bearer token on every HTTP request.
  */
 class VibeVoiceClient private constructor(
@@ -53,12 +61,36 @@ class VibeVoiceClient private constructor(
         private const val TAG = "VibeVoiceClient"
         private const val BOUNDARY = "----VibeVoiceBoundary9f2e4d"
         private const val TLS_PROTOCOL = "TLSv1.3"
+        private const val SERVER_PIN_PREFIX = "sha256/"
         private const val CLIENT_AUTH_EKU = "1.3.6.1.5.5.7.3.2"
         private const val MAX_SSE_LINE_BYTES = 64 * 1024
         private const val MAX_SSE_EVENT_CHARS = 256 * 1024
         private const val MAX_TRANSCRIPT_CHARS = 1_000_000
+        private val legacyPreferenceKeys = setOf(
+            "vibevoice_server_url",
+            "vibevoice_auth_token",
+            "vibevoice_server_certificate",
+            "vibevoice_client_certificate",
+            "vibevoice_client_private_key",
+            "vvv_public_api_v1_server_url",
+            "vvv_public_api_v1_auth_token",
+            "vvv_public_api_v1_server_certificate",
+            "vvv_public_api_v1_client_certificate",
+            "vvv_public_api_v1_client_private_key",
+        )
 
         private val json = Json { ignoreUnknownKeys = true }
+
+        /** Removes pre-hardened VibeVoice configuration so old bearer-only state is never reused. */
+        @JvmStatic
+        fun forgetLegacyConfiguration(context: Context) {
+            legacyPreferenceStores(context).forEach { prefs ->
+                if (legacyPreferenceKeys.none { prefs.contains(it) }) return@forEach
+                prefs.edit().apply {
+                    legacyPreferenceKeys.forEach(::remove)
+                }.commit()
+            }
+        }
 
         /** Returns true only when all VVV public API credentials are present and well formed. */
         @JvmStatic
@@ -73,7 +105,9 @@ class VibeVoiceClient private constructor(
             if (trimmed.isEmpty()) return null
             val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
             if (!uri.scheme.equals("https", ignoreCase = true)) return null
-            if (uri.host.isNullOrBlank() || uri.rawUserInfo != null) return null
+            val host = uri.host ?: return null
+            if (host.isBlank() || uri.rawUserInfo != null) return null
+            if (host.contains(":")) return null
             if (uri.rawQuery != null || uri.rawFragment != null) return null
             if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return null
             return "https://${uri.rawAuthority}"
@@ -87,6 +121,23 @@ class VibeVoiceClient private constructor(
                     && token.none { it.isWhitespace() }
         }
 
+        fun normalizeServerSpkiPin(raw: String): String? {
+            val trimmed = raw.trim()
+            if (!trimmed.startsWith(SERVER_PIN_PREFIX)) return null
+            val encoded = trimmed.removePrefix(SERVER_PIN_PREFIX)
+            val decoded = runCatching { Base64.decode(encoded, Base64.DEFAULT) }.getOrNull()
+                ?: return null
+            if (decoded.size != 32) return null
+            return SERVER_PIN_PREFIX + Base64.encodeToString(decoded, Base64.NO_WRAP)
+        }
+
+        fun isServerSpkiPin(raw: String): Boolean = normalizeServerSpkiPin(raw) != null
+
+        fun serverSpkiPinForCertificatePem(raw: String): String? =
+            runCatching { serverSpkiPin(parseCertificate(raw)) }.getOrNull()
+
+        internal fun parseCertificateForTest(raw: String): X509Certificate = parseCertificate(raw)
+
         fun isCertificatePem(raw: String): Boolean =
             runCatching { parseCertificate(raw) }.isSuccess
 
@@ -97,6 +148,7 @@ class VibeVoiceClient private constructor(
             raw.trim().replace("\r\n", "\n").replace('\r', '\n') + "\n"
 
         private fun loadConfig(context: Context): ClientConfig? {
+            forgetLegacyConfiguration(context)
             val prefs = context.protectedPrefs()
             val serverUrl = normalizeServerUrl(
                 prefs.getString(
@@ -110,12 +162,12 @@ class VibeVoiceClient private constructor(
                         Defaults.PREF_VIBEVOICE_AUTH_TOKEN
                     ) ?: ""
                     ).trim()
-            val serverCertificate = normalizePem(
+            val serverSpkiPin = normalizeServerSpkiPin(
                 prefs.getString(
-                    Settings.PREF_VIBEVOICE_SERVER_CERTIFICATE,
-                    Defaults.PREF_VIBEVOICE_SERVER_CERTIFICATE
+                    Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
+                    Defaults.PREF_VIBEVOICE_SERVER_SPKI_PIN
                 ) ?: ""
-            )
+            ) ?: return null
             val clientCertificate = normalizePem(
                 prefs.getString(
                     Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
@@ -129,12 +181,12 @@ class VibeVoiceClient private constructor(
                 ) ?: ""
             )
             if (!isBearerToken(token)) return null
-            if (!isCertificatePem(serverCertificate) || !isCertificatePem(clientCertificate)) return null
+            if (!isCertificatePem(clientCertificate)) return null
             if (!isPrivateKeyPem(clientPrivateKey)) return null
             return ClientConfig(
                 serverUrl = serverUrl,
                 authToken = token,
-                serverCertificatePem = serverCertificate,
+                serverSpkiPin = serverSpkiPin,
                 clientCertificatePem = clientCertificate,
                 clientPrivateKeyPem = clientPrivateKey
             )
@@ -172,12 +224,39 @@ class VibeVoiceClient private constructor(
                 .filter { it.isNotEmpty() }
                 .joinToString("")
         }
+
+        internal fun serverSpkiPin(certificate: X509Certificate): String {
+            val digest = MessageDigest.getInstance("SHA-256").digest(certificate.publicKey.encoded)
+            return SERVER_PIN_PREFIX + Base64.encodeToString(digest, Base64.NO_WRAP)
+        }
+
+        internal fun peerMatchesServerPin(
+            chain: Array<out X509Certificate>?,
+            expectedPin: String
+        ): Boolean {
+            val normalizedExpectedPin = normalizeServerSpkiPin(expectedPin) ?: return false
+            val leaf = chain?.firstOrNull() ?: return false
+            return runCatching {
+                serverSpkiPin(leaf) == normalizedExpectedPin
+            }.getOrDefault(false)
+        }
+
+        private fun legacyPreferenceStores(context: Context): List<SharedPreferences> {
+            val prefName = "${context.packageName}_preferences"
+            val stores = mutableListOf(context.getSharedPreferences(prefName, Context.MODE_PRIVATE))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                context.createDeviceProtectedStorageContext()
+                    ?.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                    ?.let(stores::add)
+            }
+            return stores
+        }
     }
 
     private data class ClientConfig(
         val serverUrl: String,
         val authToken: String,
-        val serverCertificatePem: String,
+        val serverSpkiPin: String,
         val clientCertificatePem: String,
         val clientPrivateKeyPem: String
     )
@@ -197,6 +276,7 @@ class VibeVoiceClient private constructor(
     private val transcribeUrl = "${config.serverUrl}/v1/transcribe"
     private val healthUrl = "${config.serverUrl}/health"
     private val sslSocketFactory: SSLSocketFactory = createPinnedMtlsSocketFactory(config)
+    private val hostnameVerifier: HostnameVerifier = ServerPinHostnameVerifier(config.serverSpkiPin)
 
     /** Active connection, if any. Volatile for cross-thread visibility. */
     @Volatile
@@ -270,6 +350,7 @@ class VibeVoiceClient private constructor(
     private fun openConnection(url: URL, method: String, doOutput: Boolean): HttpsURLConnection {
         return (url.openConnection() as HttpsURLConnection).apply {
             sslSocketFactory = this@VibeVoiceClient.sslSocketFactory
+            hostnameVerifier = this@VibeVoiceClient.hostnameVerifier
             requestMethod = method
             this.doOutput = doOutput
             connectTimeout = 10_000
@@ -421,22 +502,12 @@ class VibeVoiceClient private constructor(
     }
 
     private fun createPinnedMtlsSocketFactory(config: ClientConfig): SSLSocketFactory {
-        val serverCertificate = parseCertificate(config.serverCertificatePem)
-        serverCertificate.checkValidity()
-
         val clientCertificate = parseCertificate(config.clientCertificatePem)
         val clientPrivateKey = parseEcPkcs8PrivateKey(config.clientPrivateKeyPem)
         validateClientCertificate(clientCertificate)
         validateClientKeyMatchesCertificate(clientPrivateKey, clientCertificate)
 
-        val trustStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-            load(null)
-            setCertificateEntry("vvv-server", serverCertificate)
-        }
-        val trustManagers = TrustManagerFactory
-            .getInstance(TrustManagerFactory.getDefaultAlgorithm())
-            .apply { init(trustStore) }
-            .trustManagers
+        val trustManagers = arrayOf<TrustManager>(ServerPinTrustManager(config.serverSpkiPin))
 
         val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
             load(null)
@@ -451,6 +522,36 @@ class VibeVoiceClient private constructor(
             init(keyManagers, trustManagers, SecureRandom())
         }
         return Tls13OnlySocketFactory(context.socketFactory)
+    }
+
+    private class ServerPinTrustManager(
+        private val expectedPin: String
+    ) : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+            throw CertificateException("VVV client mode does not accept peer client certificates")
+        }
+
+        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+            if (!peerMatchesServerPin(chain, expectedPin)) {
+                throw CertificateException("VVV server public key pin mismatch")
+            }
+        }
+
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+
+    private class ServerPinHostnameVerifier(
+        private val expectedPin: String
+    ) : HostnameVerifier {
+        override fun verify(hostname: String?, session: SSLSession?): Boolean {
+            if (session == null) return false
+            val chain = try {
+                session.peerCertificates.filterIsInstance<X509Certificate>().toTypedArray()
+            } catch (_: SSLPeerUnverifiedException) {
+                return false
+            }
+            return peerMatchesServerPin(chain, expectedPin)
+        }
     }
 
     private fun validateClientCertificate(certificate: X509Certificate) {

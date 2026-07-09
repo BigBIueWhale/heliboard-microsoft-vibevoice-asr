@@ -240,8 +240,10 @@ pass "Source tree integrity (${#CRITICAL_FILES[@]} key files present)"
 # ──────────────────────────────────────────────────────────────
 # 10. Check for leaked secrets (safety net)
 # ──────────────────────────────────────────────────────────────
-if grep -rq "ronenzyroff" "$PROJECT_DIR/app/src/main/" 2>/dev/null; then
-    fail "Hardcoded server domain found in source code." \
+if grep -REIq 'https?://[[:alnum:]]' \
+    "$PROJECT_DIR/app/src/main/java/helium314/keyboard/latin/voice" \
+    "$PROJECT_DIR/app/src/main/res/xml/network_security_config.xml" 2>/dev/null; then
+    fail "Hardcoded VibeVoice server URL found in runtime source." \
          "The VibeVoice server URL should be configured via Settings, not hardcoded." \
          "Check VibeVoiceClient.kt and network_security_config.xml."
 fi
@@ -252,7 +254,7 @@ if grep -rq "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9" "$PROJECT_DIR/app/src/main/" 
 fi
 if grep -rq "checkServerTrusted(chain.*) {}\\|HostnameVerifier .*-> true\\|HostnameVerifier { _, _ -> true\\|createTrustAllSslContext" "$PROJECT_DIR/app/src/main/" 2>/dev/null; then
     fail "Permissive TLS code found in source code." \
-         "The VVV client must use pinned server-certificate trust, default hostname verification, and mTLS." \
+         "The VVV client must use exact server public-key pinning and mTLS." \
          "Check VibeVoiceClient.kt and network_security_config.xml."
 fi
 pass "No hardcoded secrets or permissive TLS in source"
