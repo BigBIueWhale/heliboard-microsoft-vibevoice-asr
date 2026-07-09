@@ -39,7 +39,7 @@ Once your server is up, configure it in the app:
 
 ![Settings menu — Voice Input](doc/settings_voice_input_menu.jpg)
 
-Enter the VVV server URL, server public key pin, client certificate, and client private key in **Settings > Voice Input**, then tap **Test Connection** to verify the full authenticated transport path:
+Import the VVV client bundle in **Settings > Voice Input > Import Client Bundle**, then tap **Test Connection** to verify the full authenticated transport path:
 
 ![Voice Input settings](doc/voice_input_settings.jpg)
 
@@ -48,7 +48,7 @@ Enter the VVV server URL, server public key pin, client certificate, and client 
 Run the included [`build.sh`](build.sh) script from the repository root:
 
 ```bash
-VIBEVOICE_VERSION="0.6.2" ./build.sh
+VIBEVOICE_VERSION="0.6.3" ./build.sh
 ```
 
 It validates all prerequisites (JDK 17, Android SDK, NDK, etc.) and produces a debug APK at `app/build/outputs/apk/debug/`.
@@ -60,8 +60,9 @@ Download the latest APK from the [Releases](https://github.com/BigBIueWhale/heli
 1. Transfer the APK to your Android smartphone and install it (enable "Install from unknown sources" if prompted)
 2. Go to **Settings > System > Languages & input > On-screen keyboard** and enable **HeliBoard VibeVoice Debug**
 3. Open any text field, switch to HeliBoard VibeVoice via the keyboard icon in the navigation bar
-4. Open **HeliBoard VibeVoice Settings > Voice Input** and enter the server URL, server public key pin from `certs/self-signed/server-spki-pin.txt`, client certificate from `keys/client-cert.pem`, and client private key from `keys/client-key.pem`
-5. Tap the mic icon in the toolbar — grant the microphone permission on first use
+4. On the server, create `keys/client-bundle.vvv.json` with `uv run python -m scripts.generate_client_bundle --server-url https://HOST:42862 --output keys/client-bundle.vvv.json`, replacing `HOST` with the IPv4-reachable DNS name or IPv4 address
+5. Open **HeliBoard VibeVoice Settings > Voice Input > Import Client Bundle** and paste the bundle JSON
+6. Tap the mic icon in the toolbar — grant the microphone permission on first use
 
 > **Note:** The APK is a debug build (signed with a debug key, app ID `helium314.keyboard.vibevoice.debug`). Minification is enabled so the APK size stays small. There is no release signing keystore configured.
 
@@ -94,7 +95,7 @@ All paths relative to `app/src/main/`:
 | `java/.../voice/VoiceInputController.kt` | Orchestrates the full voice input lifecycle: recording, transcription with retry, overlay UI (landing menu, amplitude bars, recordings list, status text). Theme-aware. |
 | `java/.../voice/RecordingStore.kt` | File-based storage for WAV recordings and their transcriptions. Filesystem is the source of truth — marker files track transcription state. Cleans up stale state on startup. |
 | `java/.../voice/VoicePermissionActivity.kt` | Transparent activity to request `RECORD_AUDIO` permission (required because `InputMethodService` cannot show permission dialogs directly). |
-| `java/.../settings/screens/VoiceInputScreen.kt` | Settings screen for server URL, server public key pin, mTLS client certificate/key, authenticated test connection, saved recordings, and setup link. |
+| `java/.../settings/screens/VoiceInputScreen.kt` | Settings screen for importing the VVV client bundle, inspecting server URL, server public key pin, mTLS client certificate/key, authenticated test connection, saved recordings, and setup link. |
 | `java/.../settings/screens/SavedRecordingsScreen.kt` | Full management screen for saved recordings — transcribe, copy, delete individual or all recordings. |
 | `res/drawable/ic_settings_voice.xml` | Mic icon for the Voice Input settings entry. |
 | `res/xml/network_security_config.xml` | Empty Android network security configuration. The VVV client builds its own fail-closed pinned TLS/mTLS context in code. |
@@ -118,6 +119,12 @@ All paths relative to `app/src/main/`:
 ---
 
 ## Release notes
+
+### vibevoice-v0.6.3
+
+- **One-file VVV client import.** Voice Input now has an `Import Client Bundle` action that accepts the server-generated `keys/client-bundle.vvv.json` payload containing the server URL, server public key pin, client certificate, and client private key.
+- **Bundle validation is fail-closed.** Import rejects malformed JSON, unknown fields, wrong bundle type/version, non-HTTPS origins, IPv6 literals, malformed server pins, CA certificates, certificates without `clientAuth`, invalid private keys, and certificate/key mismatches before writing preferences.
+- **The transport model is unchanged.** The bundle is only a configuration carrier; runtime access still has exactly one mode: TLS 1.3, exact server SPKI pinning, mandatory mTLS client authentication, and no application bearer secret.
 
 ### vibevoice-v0.6.2
 

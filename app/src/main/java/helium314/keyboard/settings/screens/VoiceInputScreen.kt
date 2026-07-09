@@ -42,6 +42,7 @@ fun VoiceInputScreen(
     onClickBack: () -> Unit,
 ) {
     val items = listOf(
+        SettingsWithoutKey.VIBEVOICE_IMPORT_BUNDLE,
         Settings.PREF_VIBEVOICE_SERVER_URL,
         Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
         Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
@@ -60,6 +61,35 @@ fun VoiceInputScreen(
 fun createVoiceInputSettings(context: Context): List<Setting> {
     VibeVoiceClient.forgetLegacyConfiguration(context)
     return listOf(
+        Setting(context, SettingsWithoutKey.VIBEVOICE_IMPORT_BUNDLE,
+            R.string.vibevoice_import_bundle_title, R.string.vibevoice_import_bundle_description)
+        { setting ->
+            val ctx = LocalContext.current
+            var showDialog by rememberSaveable { mutableStateOf(false) }
+            Preference(
+                name = setting.title,
+                description = setting.description,
+                onClick = { showDialog = true }
+            )
+            if (showDialog) {
+                TextInputDialog(
+                    onDismissRequest = { showDialog = false },
+                    title = { Text(stringResource(R.string.vibevoice_import_bundle_title)) },
+                    textInputLabel = { Text(stringResource(R.string.vibevoice_import_bundle_description)) },
+                    initialText = "",
+                    singleLine = false,
+                    keyboardType = KeyboardType.Password,
+                    onConfirmed = {
+                        val imported = VibeVoiceClient.importClientBundle(ctx, it)
+                        val msgRes = if (imported) R.string.vibevoice_import_bundle_success
+                            else R.string.vibevoice_import_bundle_failure
+                        Toast.makeText(ctx, msgRes, Toast.LENGTH_SHORT).show()
+                        if (imported) showDialog = false
+                    },
+                    checkTextValid = VibeVoiceClient::isClientImportBundle,
+                )
+            }
+        },
         Setting(context, Settings.PREF_VIBEVOICE_SERVER_URL,
         R.string.vibevoice_server_url_title, R.string.vibevoice_server_url_description)
     { setting ->

@@ -9,6 +9,7 @@ import helium314.keyboard.latin.settings.Defaults
 import helium314.keyboard.latin.settings.Settings
 import helium314.keyboard.latin.utils.Log
 import helium314.keyboard.latin.utils.protectedPrefs
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -53,6 +54,20 @@ import javax.net.ssl.X509TrustManager
  * TLS 1.3, exact pinned server public-key trust, mandatory client certificate
  * authentication, and no application-layer authentication fallback.
  */
+@Serializable
+private data class ClientImportBundlePayload(
+    val type: String,
+    val version: Int,
+    @SerialName("server_url")
+    val serverUrl: String,
+    @SerialName("server_spki_pin")
+    val serverSpkiPin: String,
+    @SerialName("client_certificate_pem")
+    val clientCertificatePem: String,
+    @SerialName("client_private_key_pem")
+    val clientPrivateKeyPem: String
+)
+
 class VibeVoiceClient private constructor(
     private val config: ClientConfig
 ) {
@@ -66,6 +81,9 @@ class VibeVoiceClient private constructor(
         private const val MAX_SSE_LINE_BYTES = 64 * 1024
         private const val MAX_SSE_EVENT_CHARS = 256 * 1024
         private const val MAX_TRANSCRIPT_CHARS = 1_000_000
+        private const val MAX_CLIENT_BUNDLE_CHARS = 128 * 1024
+        private const val CLIENT_BUNDLE_TYPE = "vvv-client-config"
+        private const val CLIENT_BUNDLE_VERSION = 1
         private val legacyPreferenceKeys = setOf(
             "vibevoice_server_url",
             "vibevoice_auth_token",
@@ -85,6 +103,7 @@ class VibeVoiceClient private constructor(
         )
 
         private val json = Json { ignoreUnknownKeys = true }
+        private val clientBundleJson = Json { ignoreUnknownKeys = false }
 
         /** Removes older VibeVoice public API configurations so stale state is never reused. */
         @JvmStatic
@@ -104,6 +123,23 @@ class VibeVoiceClient private constructor(
         /** Creates an authenticated client from credential-protected preferences. */
         @JvmStatic
         fun fromPreferences(context: Context): VibeVoiceClient? = loadConfig(context)?.let(::VibeVoiceClient)
+
+        /** Returns true only when raw text is a complete, valid VVV client import bundle. */
+        @JvmStatic
+        fun isClientImportBundle(raw: String): Boolean = parseClientImportBundle(raw) != null
+
+        /** Validates and atomically imports the one-file VVV client bundle into protected prefs. */
+        @JvmStatic
+        fun importClientBundle(context: Context, raw: String): Boolean {
+            val bundle = parseClientImportBundle(raw) ?: return false
+            forgetLegacyConfiguration(context)
+            return context.protectedPrefs().edit()
+                .putString(Settings.PREF_VIBEVOICE_SERVER_URL, bundle.serverUrl)
+                .putString(Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN, bundle.serverSpkiPin)
+                .putString(Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE, bundle.clientCertificatePem)
+                .putString(Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY, bundle.clientPrivateKeyPem)
+                .commit()
+        }
 
         fun normalizeServerUrl(raw: String): String? {
             val trimmed = raw.trim()
@@ -147,38 +183,100 @@ class VibeVoiceClient private constructor(
         private fun loadConfig(context: Context): ClientConfig? {
             forgetLegacyConfiguration(context)
             val prefs = context.protectedPrefs()
-            val serverUrl = normalizeServerUrl(
-                prefs.getString(
+            return normalizeClientConfig(
+                serverUrlRaw = prefs.getString(
                     Settings.PREF_VIBEVOICE_SERVER_URL,
                     Defaults.PREF_VIBEVOICE_SERVER_URL
-                ) ?: ""
-            ) ?: return null
-            val serverSpkiPin = normalizeServerSpkiPin(
-                prefs.getString(
+                ) ?: "",
+                serverSpkiPinRaw = prefs.getString(
                     Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN,
                     Defaults.PREF_VIBEVOICE_SERVER_SPKI_PIN
-                ) ?: ""
-            ) ?: return null
-            val clientCertificate = normalizePem(
-                prefs.getString(
+                ) ?: "",
+                clientCertificateRaw = prefs.getString(
                     Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE,
                     Defaults.PREF_VIBEVOICE_CLIENT_CERTIFICATE
-                ) ?: ""
-            )
-            val clientPrivateKey = normalizePem(
-                prefs.getString(
+                ) ?: "",
+                clientPrivateKeyRaw = prefs.getString(
                     Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY,
                     Defaults.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY
                 ) ?: ""
             )
-            if (!isCertificatePem(clientCertificate)) return null
-            if (!isPrivateKeyPem(clientPrivateKey)) return null
+        }
+
+        private fun parseClientImportBundle(raw: String): ClientConfig? {
+            val trimmed = raw.trim()
+            if (trimmed.length !in 1..MAX_CLIENT_BUNDLE_CHARS) return null
+            val payload = runCatching {
+                clientBundleJson.decodeFromString<ClientImportBundlePayload>(trimmed)
+            }.getOrNull() ?: return null
+            if (payload.type != CLIENT_BUNDLE_TYPE) return null
+            if (payload.version != CLIENT_BUNDLE_VERSION) return null
+            return normalizeClientConfig(
+                serverUrlRaw = payload.serverUrl,
+                serverSpkiPinRaw = payload.serverSpkiPin,
+                clientCertificateRaw = payload.clientCertificatePem,
+                clientPrivateKeyRaw = payload.clientPrivateKeyPem
+            )
+        }
+
+        private fun normalizeClientConfig(
+            serverUrlRaw: String,
+            serverSpkiPinRaw: String,
+            clientCertificateRaw: String,
+            clientPrivateKeyRaw: String
+        ): ClientConfig? {
+            val serverUrl = normalizeServerUrl(serverUrlRaw) ?: return null
+            val serverSpkiPin = normalizeServerSpkiPin(serverSpkiPinRaw) ?: return null
+            val clientCertificate = normalizePem(clientCertificateRaw)
+            val clientPrivateKey = normalizePem(clientPrivateKeyRaw)
+            val certificate = runCatching { parseCertificate(clientCertificate) }.getOrNull()
+                ?: return null
+            val privateKey = runCatching { parseEcPkcs8PrivateKey(clientPrivateKey) }.getOrNull()
+                ?: return null
+            if (runCatching {
+                validateClientCertificate(certificate)
+                validateClientKeyMatchesCertificate(privateKey, certificate)
+            }.isFailure) {
+                return null
+            }
             return ClientConfig(
                 serverUrl = serverUrl,
                 serverSpkiPin = serverSpkiPin,
                 clientCertificatePem = clientCertificate,
                 clientPrivateKeyPem = clientPrivateKey
             )
+        }
+
+        private fun validateClientCertificate(certificate: X509Certificate) {
+            certificate.checkValidity()
+            if (certificate.basicConstraints >= 0) {
+                throw GeneralSecurityException("Client certificate must not be a CA certificate")
+            }
+            val keyUsage = certificate.keyUsage
+            if (keyUsage == null || keyUsage.isEmpty() || !keyUsage[0]) {
+                throw GeneralSecurityException("Client certificate must allow digital signatures")
+            }
+            val extendedKeyUsage = certificate.extendedKeyUsage
+            if (extendedKeyUsage == null || CLIENT_AUTH_EKU !in extendedKeyUsage) {
+                throw GeneralSecurityException("Client certificate must include clientAuth EKU")
+            }
+        }
+
+        private fun validateClientKeyMatchesCertificate(
+            privateKey: PrivateKey,
+            certificate: X509Certificate
+        ) {
+            val probe = "vvv-client-key-check".toByteArray(Charsets.UTF_8)
+            val signature = Signature.getInstance("SHA256withECDSA")
+            signature.initSign(privateKey)
+            signature.update(probe)
+            val signedProbe = signature.sign()
+
+            signature.initVerify(certificate.publicKey)
+            signature.update(probe)
+            if (!signature.verify(signedProbe)) {
+                throw GeneralSecurityException("Client private key does not match client certificate")
+            }
         }
 
         private fun parseCertificate(pem: String): X509Certificate {
@@ -538,38 +636,6 @@ class VibeVoiceClient private constructor(
                 return false
             }
             return peerMatchesServerPin(chain, expectedPin)
-        }
-    }
-
-    private fun validateClientCertificate(certificate: X509Certificate) {
-        certificate.checkValidity()
-        if (certificate.basicConstraints >= 0) {
-            throw GeneralSecurityException("Client certificate must not be a CA certificate")
-        }
-        val keyUsage = certificate.keyUsage
-        if (keyUsage != null && (keyUsage.isEmpty() || !keyUsage[0])) {
-            throw GeneralSecurityException("Client certificate must allow digital signatures")
-        }
-        val extendedKeyUsage = certificate.extendedKeyUsage
-        if (extendedKeyUsage != null && CLIENT_AUTH_EKU !in extendedKeyUsage) {
-            throw GeneralSecurityException("Client certificate must include clientAuth EKU")
-        }
-    }
-
-    private fun validateClientKeyMatchesCertificate(
-        privateKey: PrivateKey,
-        certificate: X509Certificate
-    ) {
-        val probe = "vvv-client-key-check".toByteArray(Charsets.UTF_8)
-        val signature = Signature.getInstance("SHA256withECDSA")
-        signature.initSign(privateKey)
-        signature.update(probe)
-        val signedProbe = signature.sign()
-
-        signature.initVerify(certificate.publicKey)
-        signature.update(probe)
-        if (!signature.verify(signedProbe)) {
-            throw GeneralSecurityException("Client private key does not match client certificate")
         }
     }
 

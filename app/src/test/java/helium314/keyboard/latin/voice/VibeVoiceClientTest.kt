@@ -5,6 +5,9 @@ import android.content.Context
 import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import helium314.keyboard.latin.settings.Settings
+import helium314.keyboard.latin.utils.protectedPrefs
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.test.Test
@@ -64,6 +67,48 @@ class VibeVoiceClientTest {
             "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
             VibeVoiceClient.normalizePem("\r\n-----BEGIN PRIVATE KEY-----\r\nabc\r\n-----END PRIVATE KEY-----\r\n")
         )
+    }
+
+    @Test fun `client bundle import writes current hardened preferences`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = context.protectedPrefs()
+        prefs.edit().clear().commit()
+        val bundle = clientBundleJson(serverUrl = " https://vvv.example.invalid:42862/ ")
+
+        assertTrue(VibeVoiceClient.isClientImportBundle(bundle))
+        assertTrue(VibeVoiceClient.importClientBundle(context, bundle))
+
+        assertEquals(
+            "https://vvv.example.invalid:42862",
+            prefs.getString(Settings.PREF_VIBEVOICE_SERVER_URL, "")
+        )
+        assertEquals(
+            TEST_SERVER_PIN,
+            prefs.getString(Settings.PREF_VIBEVOICE_SERVER_SPKI_PIN, "")
+        )
+        assertEquals(
+            VibeVoiceClient.normalizePem(TEST_CLIENT_CERTIFICATE),
+            prefs.getString(Settings.PREF_VIBEVOICE_CLIENT_CERTIFICATE, "")
+        )
+        assertEquals(
+            VibeVoiceClient.normalizePem(TEST_CLIENT_PRIVATE_KEY),
+            prefs.getString(Settings.PREF_VIBEVOICE_CLIENT_PRIVATE_KEY, "")
+        )
+        assertTrue(VibeVoiceClient.isConfigured(context))
+    }
+
+    @Test fun `client bundle parser is strict`() {
+        assertFalse(VibeVoiceClient.isClientImportBundle(clientBundleJson(type = "wrong")))
+        assertFalse(VibeVoiceClient.isClientImportBundle(clientBundleJson(version = 2)))
+        assertFalse(VibeVoiceClient.isClientImportBundle(clientBundleJson(serverUrl = "http://vvv.example.invalid")))
+        assertFalse(VibeVoiceClient.isClientImportBundle(clientBundleJson(serverPin = "sha256/not-base64")))
+        assertFalse(VibeVoiceClient.isClientImportBundle(clientBundleJson(clientKey = TEST_EC_PRIVATE_KEY)))
+        assertFalse(VibeVoiceClient.isClientImportBundle(
+            clientBundleJson(clientCertificate = TEST_CERTIFICATE, clientKey = TEST_EC_PRIVATE_KEY)
+        ))
+        assertFalse(VibeVoiceClient.isClientImportBundle(
+            clientBundleJson().dropLast(1) + ",\"unexpected\":true}"
+        ))
     }
 
     @Test fun `hardened config keys do not reuse pre-hardened preference names`() {
@@ -131,6 +176,9 @@ class VibeVoiceClientTest {
     }
 
     private companion object {
+        private const val TEST_SERVER_PIN =
+            "sha256/ERERERERERERERERERERERERERERERERERERERERERE="
+
         private const val TEST_CERTIFICATE = """
 -----BEGIN CERTIFICATE-----
 MIIBrTCCAVOgAwIBAgIUMgcIeKd0z5rGtEw5msd690Zjwm8wCgYIKoZIzj0EAwIw
@@ -156,5 +204,42 @@ XGWKsVzss6GQZBM1FapetgRotclZSBK4z+HaP8w53DlG9Y04xZMrEkd5
 
         private const val WRONG_SERVER_PIN =
             "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+        private const val TEST_CLIENT_CERTIFICATE = """
+-----BEGIN CERTIFICATE-----
+MIIBbzCCARSgAwIBAgIUSuxsMlTqnpa8n5U6VltoT06les8wCgYIKoZIzj0EAwIw
+HTEbMBkGA1UEAwwSVlZWIENsaWVudCBBdXRoIENBMB4XDTI2MDcwOTIxMjczOVoX
+DTI3MDcwOTIxMjczOVowFzEVMBMGA1UEAwwMYW5kcm9pZC10ZXN0MFkwEwYHKoZI
+zj0CAQYIKoZIzj0DAQcDQgAEOCM9PhgRTaip4Lul1/5mQ03bG9RYBzHMEqa4BnzD
+9t7C7odhX4ZnHBR6r3myJmq/WlYNGTCdgrbJMbLqhKuNHKM4MDYwDAYDVR0TAQH/
+BAIwADAOBgNVHQ8BAf8EBAMCB4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwIwCgYI
+KoZIzj0EAwIDSQAwRgIhAKXiD++5cYjT1g8fSzKTuKBha8HQcNOa7B0QEuoOPMqZ
+AiEAgN1R9ivaK4E/10Axnciv0iWg8Cwh4Go4MMgehfB0iAw=
+-----END CERTIFICATE-----
+"""
+
+        private const val TEST_CLIENT_PRIVATE_KEY = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg81RBJaNHsYyx0y1J
+G1f+VATbDc/R4WWg+Kl/wJKDv9mhRANCAAQ4Iz0+GBFNqKngu6XX/mZDTdsb1FgH
+McwSprgGfMP23sLuh2FfhmccFHqvebImar9aVg0ZMJ2CtskxsuqEq40c
+-----END PRIVATE KEY-----
+"""
+
+        private fun clientBundleJson(
+            type: String = "vvv-client-config",
+            version: Int = 1,
+            serverUrl: String = "https://vvv.example.invalid:42862",
+            serverPin: String = TEST_SERVER_PIN,
+            clientCertificate: String = TEST_CLIENT_CERTIFICATE,
+            clientKey: String = TEST_CLIENT_PRIVATE_KEY
+        ): String = buildJsonObject {
+            put("type", type)
+            put("version", version)
+            put("server_url", serverUrl)
+            put("server_spki_pin", serverPin)
+            put("client_certificate_pem", VibeVoiceClient.normalizePem(clientCertificate))
+            put("client_private_key_pem", VibeVoiceClient.normalizePem(clientKey))
+        }.toString()
     }
 }
